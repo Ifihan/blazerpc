@@ -31,6 +31,11 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.7.0",
 ]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "pymdown-extensions>=10.0",
+]
 
 [project.scripts]
 blaze = "blazerpc.cli.main:app"

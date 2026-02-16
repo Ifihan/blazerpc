@@ -1,0 +1,65 @@
+site_name: BlazeRPC
+site_description: A lightweight, framework-agnostic gRPC library for ML inference
+site_url: https://ifihan.github.io/blazerpc
+repo_url: https://github.com/Ifihan/blazerpc
+repo_name: Ifihan/blazerpc
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Architecture: architecture.md
+  - Guides:
+      - Streaming: guides/streaming.md
+      - Adaptive batching: guides/batching.md
+      - Middleware: guides/middleware.md
+      - Framework integrations: guides/integrations.md
+  - Configuration: configuration.md
+  - API reference: api-reference.md
+  - Contributing: contributing.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - attr_list
+  - def_list
+
+plugins:
+  - search
