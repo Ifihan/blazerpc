@@ -11,12 +11,11 @@ from functools import wraps
 from typing import Any, Callable
 
 import numpy as np
+import tensorflow as tf
 
 
 def tf_to_numpy(tensor: Any) -> np.ndarray:
     """Convert a TensorFlow tensor to a NumPy array."""
-    import tensorflow as tf
-
     if not isinstance(tensor, tf.Tensor):
         raise TypeError(f"Expected tf.Tensor, got {type(tensor).__name__}")
     return tensor.numpy()
@@ -32,8 +31,6 @@ def numpy_to_tf(arr: np.ndarray, dtype: Any = None) -> Any:
     dtype:
         Optional TensorFlow dtype override.
     """
-    import tensorflow as tf
-
     tensor = tf.convert_to_tensor(arr)
     if dtype is not None:
         tensor = tf.cast(tensor, dtype)
@@ -74,8 +71,6 @@ def tf_model(
             }
 
             result = fn(*converted_args, **converted_kwargs)
-
-            import tensorflow as tf
 
             if isinstance(result, tf.Tensor):
                 return tf_to_numpy(result)

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import onnxruntime as ort
 
 
 class ONNXModel:
@@ -40,8 +41,6 @@ class ONNXModel:
         providers: list[str] | None = None,
         session_options: Any = None,
     ) -> None:
-        import onnxruntime as ort
-
         if providers is None:
             providers = ["CPUExecutionProvider"]
 

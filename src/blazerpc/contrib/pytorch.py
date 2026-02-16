@@ -11,6 +11,7 @@ from functools import wraps
 from typing import Any, Callable
 
 import numpy as np
+import torch
 
 
 def torch_to_numpy(tensor: Any) -> np.ndarray:
@@ -18,8 +19,6 @@ def torch_to_numpy(tensor: Any) -> np.ndarray:
 
     Detaches from the computation graph and moves to CPU if needed.
     """
-    import torch
-
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f"Expected torch.Tensor, got {type(tensor).__name__}")
     return tensor.detach().cpu().numpy()
@@ -41,8 +40,6 @@ def numpy_to_torch(
     dtype:
         Optional torch dtype override.
     """
-    import torch
-
     tensor = torch.from_numpy(arr)
     if dtype is not None:
         tensor = tensor.to(dtype)
@@ -85,8 +82,6 @@ def torch_model(
             }
 
             result = fn(*converted_args, **converted_kwargs)
-
-            import torch
 
             if isinstance(result, torch.Tensor):
                 return torch_to_numpy(result)

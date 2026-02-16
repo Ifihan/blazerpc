@@ -64,11 +64,11 @@ blaze serve app:app
 
 The server registers three services automatically:
 
-| Service | Purpose |
-|---------|---------|
-| `blazerpc.InferenceService` | Your model RPCs |
-| `grpc.health.v1.Health` | Standard health checks |
-| `grpc.reflection.v1alpha.ServerReflection` | Service discovery |
+| Service                                    | Purpose                |
+| ------------------------------------------ | ---------------------- |
+| `blazerpc.InferenceService`                | Your model RPCs        |
+| `grpc.health.v1.Health`                    | Standard health checks |
+| `grpc.reflection.v1alpha.ServerReflection` | Service discovery      |
 
 ### 3. Export the `.proto` file
 
@@ -205,11 +205,11 @@ from blazerpc.server.middleware import LoggingMiddleware, MetricsMiddleware
 
 **Built-in middleware:**
 
-| Middleware | Description |
-|------------|-------------|
-| `LoggingMiddleware` | Logs every RPC call with method name, peer address, and response status. |
-| `MetricsMiddleware` | Exports Prometheus metrics: `blazerpc_requests_total` and `blazerpc_request_duration_seconds`. |
-| `ExceptionMiddleware` | Base class for custom exception-to-gRPC-status mapping. |
+| Middleware            | Description                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `LoggingMiddleware`   | Logs every RPC call with method name, peer address, and response status.                       |
+| `MetricsMiddleware`   | Exports Prometheus metrics: `blazerpc_requests_total` and `blazerpc_request_duration_seconds`. |
+| `ExceptionMiddleware` | Base class for custom exception-to-gRPC-status mapping.                                        |
 
 To build your own middleware, subclass `Middleware` and implement `on_request` and `on_response`:
 
@@ -228,7 +228,7 @@ class AuthMiddleware(Middleware):
 
 ## CLI reference
 
-```
+```bash
 blaze serve <app_path> [OPTIONS]
 
   Start the BlazeRPC gRPC server.
@@ -243,7 +243,7 @@ blaze serve <app_path> [OPTIONS]
     --reload          Enable auto-reload           [default: False]
 ```
 
-```
+```bash
 blaze proto <app_path> [OPTIONS]
 
   Export the generated .proto file.
@@ -257,7 +257,7 @@ blaze proto <app_path> [OPTIONS]
 
 ## Project structure
 
-```
+```bash
 src/blazerpc/
   __init__.py          # Public API: BlazeApp, TensorInput, TensorOutput, exceptions
   app.py               # BlazeApp class -- model registration and server lifecycle
@@ -306,6 +306,10 @@ uv run ruff check src/
 # Type check
 uv run mypy src/blazerpc/
 ```
+
+## Contributing
+
+We welcome contributions of all kinds -- bug fixes, new features, documentation improvements, and example applications. See the [Contributing Guide](CONTRIBUTING.md) for instructions on setting up a development environment, running tests, and submitting a pull request.
 
 ## License
 
