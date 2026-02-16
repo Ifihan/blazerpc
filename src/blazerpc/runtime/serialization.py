@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, get_args, get_origin
+from typing import Any
 
 import numpy as np
 
 from blazerpc.exceptions import SerializationError
-from blazerpc.types import DTYPE_MAP, PYTHON_TYPE_MAP, _TensorType
+from blazerpc.types import DTYPE_MAP, _TensorType
 
 # Reverse mapping: proto type string -> numpy dtype.
 _PROTO_TO_NUMPY: dict[str, type[np.generic]] = {v: k for k, v in DTYPE_MAP.items()}

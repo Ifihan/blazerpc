@@ -7,7 +7,6 @@ validation, and error handling.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from typing import Any
 
 from blazerpc.exceptions import InferenceError

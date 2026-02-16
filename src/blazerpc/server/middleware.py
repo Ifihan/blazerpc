@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any
 
 from grpclib.events import RecvRequest, SendTrailingMetadata, listen
 from grpclib.server import Server
