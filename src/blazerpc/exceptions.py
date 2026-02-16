@@ -35,9 +35,7 @@ class SerializationError(BlazeRPCError):
 class InferenceError(BlazeRPCError):
     """Raised when model inference fails."""
 
-    def __init__(
-        self, message: str, *, model_name: str | None = None
-    ) -> None:
+    def __init__(self, message: str, *, model_name: str | None = None) -> None:
         self.model_name = model_name
         super().__init__(message)
 

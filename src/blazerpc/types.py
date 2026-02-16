@@ -36,9 +36,7 @@ PYTHON_TYPE_MAP: dict[type, str] = {
 class _TensorType:
     """Internal representation of a tensor type with shape and dtype info."""
 
-    def __init__(
-        self, dtype: type, shape: tuple[Any, ...], *, is_input: bool
-    ) -> None:
+    def __init__(self, dtype: type, shape: tuple[Any, ...], *, is_input: bool) -> None:
         self.dtype = dtype
         self.shape = shape
         self.is_input = is_input

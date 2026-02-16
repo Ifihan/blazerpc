@@ -48,9 +48,7 @@ class ModelExecutor:
                 model_name=self.name,
             ) from exc
 
-    async def execute_batch(
-        self, kwargs_list: list[dict[str, Any]]
-    ) -> list[Any]:
+    async def execute_batch(self, kwargs_list: list[dict[str, Any]]) -> list[Any]:
         """Run inference on a batch of inputs.
 
         The model function receives the full batch. The caller is

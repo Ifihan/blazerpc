@@ -58,15 +58,11 @@ def tf_model(
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             converted_args = [
-                numpy_to_tf(a, dtype=dtype)
-                if isinstance(a, np.ndarray)
-                else a
+                numpy_to_tf(a, dtype=dtype) if isinstance(a, np.ndarray) else a
                 for a in args
             ]
             converted_kwargs = {
-                k: numpy_to_tf(v, dtype=dtype)
-                if isinstance(v, np.ndarray)
-                else v
+                k: numpy_to_tf(v, dtype=dtype) if isinstance(v, np.ndarray) else v
                 for k, v in kwargs.items()
             }
 

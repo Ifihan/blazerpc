@@ -86,9 +86,7 @@ class ProtoGenerator:
         for param_name, param_type in model.input_types.items():
             proto_type, repeated = _type_to_proto_field(param_type)
             prefix = "repeated " if repeated else ""
-            lines.append(
-                f"  {prefix}{proto_type} {param_name} = {field_num};"
-            )
+            lines.append(f"  {prefix}{proto_type} {param_name} = {field_num};")
             field_num += 1
         lines += ["}", ""]
         return lines
@@ -116,8 +114,7 @@ class ProtoGenerator:
                 )
             else:
                 lines.append(
-                    f"  rpc Predict{name}({name}Request) "
-                    f"returns ({name}Response);"
+                    f"  rpc Predict{name}({name}Request) " f"returns ({name}Response);"
                 )
         lines += ["}", ""]
         return lines

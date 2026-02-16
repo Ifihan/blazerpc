@@ -69,15 +69,11 @@ def torch_model(
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             converted_args = [
-                numpy_to_torch(a, device=device)
-                if isinstance(a, np.ndarray)
-                else a
+                numpy_to_torch(a, device=device) if isinstance(a, np.ndarray) else a
                 for a in args
             ]
             converted_kwargs = {
-                k: numpy_to_torch(v, device=device)
-                if isinstance(v, np.ndarray)
-                else v
+                k: numpy_to_torch(v, device=device) if isinstance(v, np.ndarray) else v
                 for k, v in kwargs.items()
             }
 

@@ -91,17 +91,13 @@ class Batcher:
                 remaining = deadline - asyncio.get_event_loop().time()
                 if remaining <= 0:
                     break
-                item = await asyncio.wait_for(
-                    self.queue.get(), timeout=remaining
-                )
+                item = await asyncio.wait_for(self.queue.get(), timeout=remaining)
                 batch.append(item)
         except asyncio.TimeoutError:
             pass
         return batch
 
-    async def _process_loop(
-        self, inference_fn: Callable[..., Any]
-    ) -> None:
+    async def _process_loop(self, inference_fn: Callable[..., Any]) -> None:
         """Main batching loop — runs as a background task."""
         while self._running:
             batch = await self._collect_batch()
@@ -111,9 +107,7 @@ class Batcher:
             log.debug("Processing batch of %d items", len(batch))
 
             try:
-                results = await inference_fn(
-                    [item.request for item in batch]
-                )
+                results = await inference_fn([item.request for item in batch])
                 if len(results) != len(batch):
                     exc = RuntimeError(
                         f"Batch function returned {len(results)} results "

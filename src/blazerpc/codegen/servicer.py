@@ -53,9 +53,7 @@ class InferenceServicer:
                 handler_fn = _make_streaming_handler(model)
                 cardinality = Cardinality.UNARY_STREAM
             else:
-                handler_fn = _make_unary_handler(
-                    model, batcher=self._batcher
-                )
+                handler_fn = _make_unary_handler(model, batcher=self._batcher)
                 cardinality = Cardinality.UNARY_UNARY
 
             mapping[path] = Handler(
@@ -100,9 +98,7 @@ def _make_unary_handler(
             else:
                 raw_result = await asyncio.to_thread(model.func, **kwargs)
         except Exception as exc:
-            raise InferenceError(
-                str(exc), model_name=model.name
-            ) from exc
+            raise InferenceError(str(exc), model_name=model.name) from exc
 
         response_bytes = _encode_response(raw_result, model)
         await stream.send_message(response_bytes)
@@ -129,9 +125,7 @@ def _make_streaming_handler(model: ModelInfo) -> Callable[..., Any]:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise InferenceError(
-                str(exc), model_name=model.name
-            ) from exc
+            raise InferenceError(str(exc), model_name=model.name) from exc
 
     return _handler
 

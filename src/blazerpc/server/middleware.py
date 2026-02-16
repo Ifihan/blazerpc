@@ -72,9 +72,7 @@ class LoggingMiddleware(Middleware):
 
     async def on_request(self, event: RecvRequest) -> None:
         peer = event.peer
-        self._log.info(
-            "RPC request: %s from %s", event.method_name, peer
-        )
+        self._log.info("RPC request: %s from %s", event.method_name, peer)
 
     async def on_response(self, event: SendTrailingMetadata) -> None:
         self._log.info(

@@ -77,9 +77,7 @@ class ONNXModel:
         feed = dict(zip(self._input_names, inputs))
         return self._session.run(self._output_names, feed)
 
-    def predict_dict(
-        self, inputs: dict[str, np.ndarray]
-    ) -> dict[str, np.ndarray]:
+    def predict_dict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Run inference with named inputs, returning named outputs."""
         results = self._session.run(self._output_names, inputs)
         return dict(zip(self._output_names, results))
