@@ -6,6 +6,8 @@ repo_name: Ifihan/blazerpc
 
 theme:
   name: material
+  icon:
+    repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -63,3 +65,18 @@ markdown_extensions:
 
 plugins:
   - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ifihan
+      name: ifihan on GitHub
+    - icon: fontawesome/brands/bluesky
+      link: https://ifihan.bsky.social
+      name: ifihan on Bluesky
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/ifihan_
+      name: ifihan_ on X
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/blazerpc
+      name: blazerpc on PyPI
