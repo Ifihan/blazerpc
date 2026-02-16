@@ -1,4 +1,4 @@
-"""Middleware (interceptors) for BlazeRPC servers.
+"""Interceptors for logging, auth, rate limiting, etc.
 
 Built on top of grpclib's event system.  Each middleware is an async
 callback that hooks into ``RecvRequest`` / ``SendTrailingMetadata``
@@ -8,7 +8,7 @@ Usage::
 
     from blazerpc.server.middleware import LoggingMiddleware, MetricsMiddleware
 
-    server = GRPCServer(handlers)
+    # Attach to a grpclib Server instance:
     LoggingMiddleware().attach(grpclib_server)
     MetricsMiddleware().attach(grpclib_server)
 """
@@ -116,8 +116,6 @@ class MetricsMiddleware(Middleware):
         self._timings: dict[int, tuple[str, float]] = {}
 
     async def on_request(self, event: RecvRequest) -> None:
-        # Store start time keyed by id of the event's metadata object
-        # (unique per request).
         key = id(event.metadata)
         self._timings[key] = (event.method_name, time.perf_counter())
 
@@ -141,9 +139,8 @@ class MetricsMiddleware(Middleware):
 class ExceptionMiddleware(Middleware):
     """Maps Python exceptions to gRPC status codes.
 
-    This middleware is a no-op on the event level — the actual mapping
-    is handled inside the servicer handlers (see
-    :mod:`blazerpc.codegen.servicer`).  It exists as a placeholder for
+    This middleware is a no-op on the event level -- the actual mapping
+    is handled inside the servicer handlers.  It exists as a base for
     users who want to attach custom exception-to-status mappings via
     subclassing.
     """
