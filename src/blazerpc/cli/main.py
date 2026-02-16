@@ -8,6 +8,9 @@ import sys
 
 import typer
 
+from blazerpc.cli.proto import export_proto
+from blazerpc.cli.serve import load_app
+
 app = typer.Typer(
     name="blaze",
     help="BlazeRPC - Lightning-fast gRPC for ML inference",
@@ -28,8 +31,6 @@ def serve(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-
-    from blazerpc.cli.serve import load_app
 
     blaze_app = load_app(app_path)
 
@@ -60,9 +61,6 @@ def proto(
     output_dir: str = typer.Option(".", help="Output directory for .proto files"),
 ) -> None:
     """Export generated .proto files."""
-    from blazerpc.cli.proto import export_proto
-    from blazerpc.cli.serve import load_app
-
     blaze_app = load_app(app_path)
     path = export_proto(blaze_app, output_dir)
     typer.echo(f"✓ Proto written to {path}")
