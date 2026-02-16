@@ -7,6 +7,8 @@ import tempfile
 
 import pytest
 
+from blazerpc.app import BlazeApp
+from blazerpc.cli.proto import export_proto
 from blazerpc.cli.serve import load_app
 from blazerpc.exceptions import ConfigurationError
 
@@ -40,9 +42,6 @@ def test_load_app_not_blazeapp() -> None:
 
 
 def test_proto_export() -> None:
-    from blazerpc.app import BlazeApp
-    from blazerpc.cli.proto import export_proto
-
     app = BlazeApp(enable_batching=False)
 
     @app.model("test_model")

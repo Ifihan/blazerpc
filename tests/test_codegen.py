@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from grpclib.const import Cardinality
 
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.proto import ProtoGenerator, _sanitize_name, _type_to_proto_field
@@ -223,8 +224,6 @@ class TestInferenceServicer:
         assert "/blazerpc.InferenceService/PredictClassify" in mapping
 
     def test_streaming_model_cardinality(self) -> None:
-        from grpclib.const import Cardinality
-
         app = BlazeApp(enable_batching=False)
 
         @app.model("llm", streaming=True)
@@ -237,8 +236,6 @@ class TestInferenceServicer:
         assert handler.cardinality == Cardinality.UNARY_STREAM
 
     def test_unary_model_cardinality(self) -> None:
-        from grpclib.const import Cardinality
-
         app = BlazeApp(enable_batching=False)
 
         @app.model("sentiment")

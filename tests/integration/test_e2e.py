@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
+from grpclib.const import Cardinality
 from grpclib.server import Server
 
 from blazerpc.app import BlazeApp
@@ -71,8 +71,6 @@ async def test_streaming_model_registers() -> None:
     path = "/blazerpc.InferenceService/PredictTokens"
     assert path in mapping
     # Streaming RPCs have UNARY_STREAM cardinality.
-    from grpclib.const import Cardinality
-
     handler = mapping[path]
     assert handler.cardinality == Cardinality.UNARY_STREAM
 

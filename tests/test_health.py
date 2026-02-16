@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from blazerpc.app import BlazeApp
+from blazerpc.codegen.servicer import build_servicer
 from blazerpc.server.health import build_health_service
 
 
@@ -16,9 +18,6 @@ def test_build_health_service_no_servicers() -> None:
 
 def test_build_health_service_with_servicers() -> None:
     """Health service accepts servicer instances for per-service checks."""
-    from blazerpc.app import BlazeApp
-    from blazerpc.codegen.servicer import build_servicer
-
     app = BlazeApp(enable_batching=False)
 
     @app.model("echo")

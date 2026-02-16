@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from grpclib.server import Server
 
-from blazerpc.codegen.servicer import build_servicer
 from blazerpc.app import BlazeApp
+from blazerpc.codegen.servicer import build_servicer
 from blazerpc.server.grpc import GRPCServer
 
 
@@ -29,8 +30,6 @@ async def test_server_start_and_stop() -> None:
     _, server = _make_server()
 
     # Start the underlying grpclib server without blocking on signals.
-    from grpclib.server import Server
-
     grpc_server = Server([build_servicer(BlazeApp(enable_batching=False).registry)])
 
     app = BlazeApp(enable_batching=False)

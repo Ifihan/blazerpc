@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from blazerpc.app import BlazeApp
 from blazerpc.exceptions import ConfigurationError
 
 
@@ -35,8 +36,6 @@ def load_app(import_string: str) -> Any:
         raise ConfigurationError(
             f"Module '{module_path}' has no attribute '{attr_name}'"
         ) from exc
-
-    from blazerpc.app import BlazeApp
 
     if not isinstance(app, BlazeApp):
         raise ConfigurationError(

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Callable
 
+from blazerpc.codegen.servicer import build_servicer
 from blazerpc.runtime.batcher import Batcher
 from blazerpc.runtime.registry import ModelRegistry
+from blazerpc.server.grpc import GRPCServer
+from blazerpc.server.health import build_health_service
+from blazerpc.server.reflection import build_reflection_service
 
 
 class BlazeApp:
@@ -38,11 +42,6 @@ class BlazeApp:
 
     async def serve(self, host: str = "0.0.0.0", port: int = 50051) -> None:
         """Start the gRPC server and block until shutdown."""
-        from blazerpc.codegen.servicer import build_servicer
-        from blazerpc.server.grpc import GRPCServer
-        from blazerpc.server.health import build_health_service
-        from blazerpc.server.reflection import build_reflection_service
-
         servicer = build_servicer(self.registry, batcher=self.batcher)
 
         health = build_health_service([servicer])
