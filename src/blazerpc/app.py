@@ -1,0 +1,41 @@
+"""BlazeApp main class - orchestrates model registration, codegen, and server lifecycle."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+from blazerpc.runtime.batcher import Batcher
+from blazerpc.runtime.registry import ModelRegistry
+
+
+class BlazeApp:
+    def __init__(
+        self,
+        name: str = "blazerpc",
+        enable_batching: bool = True,
+        max_batch_size: int = 32,
+        batch_timeout_ms: float = 10.0,
+    ):
+        self.name = name
+        self.registry = ModelRegistry()
+        self.batcher = (
+            Batcher(max_batch_size, batch_timeout_ms) if enable_batching else None
+        )
+
+    def model(
+        self,
+        name: str,
+        version: str = "1",
+        streaming: bool = False,
+    ) -> Callable:
+        """Decorator to register a model endpoint."""
+
+        def decorator(func: Callable) -> Callable:
+            self.registry.register(name, version, func, streaming)
+            return func
+
+        return decorator
+
+    async def serve(self, host: str = "0.0.0.0", port: int = 50051) -> None:
+        """Start the gRPC server."""
+        raise NotImplementedError
