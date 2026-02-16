@@ -40,7 +40,16 @@ class BlazeApp:
         """Start the gRPC server and block until shutdown."""
         from blazerpc.codegen.servicer import build_servicer
         from blazerpc.server.grpc import GRPCServer
+        from blazerpc.server.health import build_health_service
+        from blazerpc.server.reflection import build_reflection_service
 
         servicer = build_servicer(self.registry, batcher=self.batcher)
-        server = GRPCServer([servicer])
+
+        health = build_health_service([servicer])
+        reflection_handlers = build_reflection_service(
+            ["blazerpc.InferenceService"]
+        )
+
+        handlers = [servicer, health, *reflection_handlers]
+        server = GRPCServer(handlers)
         await server.start(host, port)
