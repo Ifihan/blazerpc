@@ -1,11 +1,11 @@
 [project]
 name = "blazerpc"
-version = "0.1.0"
+version = "1.0.0"
 description = "A lightweight, framework-agnostic gRPC library for machine learning inference"
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "ifihan", email = "victoriaolusheye@gmail.com" }
+    { name = "Ifihanagbara Olusheye", email = "victoriaolusheye@gmail.com" }
 ]
 requires-python = ">=3.10"
 dependencies = [
