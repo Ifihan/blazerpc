@@ -9,7 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
-DS_Store
+.DS_Store
 
 blazerpc_prd.md
 blazerpc_trd.md
