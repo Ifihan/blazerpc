@@ -37,5 +37,10 @@ class BlazeApp:
         return decorator
 
     async def serve(self, host: str = "0.0.0.0", port: int = 50051) -> None:
-        """Start the gRPC server."""
-        raise NotImplementedError
+        """Start the gRPC server and block until shutdown."""
+        from blazerpc.codegen.servicer import build_servicer
+        from blazerpc.server.grpc import GRPCServer
+
+        servicer = build_servicer(self.registry, batcher=self.batcher)
+        server = GRPCServer([servicer])
+        await server.start(host, port)
