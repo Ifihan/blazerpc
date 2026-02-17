@@ -11,9 +11,28 @@ import logging
 import signal
 from typing import Any, Sequence
 
+from grpclib.encoding.base import CodecBase
 from grpclib.server import Server
 
 log = logging.getLogger("blazerpc.server")
+
+
+class RawCodec(CodecBase):
+    """Pass-through codec that skips protobuf serialization.
+
+    BlazeRPC handlers encode/decode messages themselves, so the codec
+    just forwards raw bytes without calling ``FromString``/``SerializeToString``.
+    """
+
+    __content_subtype__ = "proto"
+
+    def encode(self, message: Any, message_type: Any) -> bytes:
+        if isinstance(message, bytes):
+            return message
+        return message
+
+    def decode(self, data: bytes, message_type: Any) -> Any:
+        return data
 
 
 class GRPCServer:
@@ -36,7 +55,7 @@ class GRPCServer:
         port: int = 50051,
     ) -> None:
         """Start serving and block until shutdown is requested."""
-        self._server = Server(self._handlers)
+        self._server = Server(self._handlers, codec=RawCodec())
         await self._server.start(host, port)
 
         log.info("Server listening on %s:%d", host, port)

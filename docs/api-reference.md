@@ -181,9 +181,9 @@ await server.start(host="0.0.0.0", port=50051)
 
 Create a gRPC health service. Pass servicer instances for per-service health tracking, or `None` for unconditional `SERVING` status.
 
-### `build_reflection_service(service_names=None) -> list`
+### `build_reflection_service(handlers=None) -> list`
 
-Create gRPC reflection handlers. Pass fully-qualified service names (e.g. `["blazerpc.InferenceService"]`) so clients can discover available RPCs.
+Create gRPC reflection handlers. Pass gRPC service handler objects (e.g. the servicer from `build_servicer()`) so clients can discover available RPCs.
 
 ---
 
