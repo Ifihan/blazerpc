@@ -11,6 +11,9 @@ wheels/
 
 .DS_Store
 
+# MkDocs
+site/
+
 blazerpc_prd.md
 blazerpc_trd.md
 
