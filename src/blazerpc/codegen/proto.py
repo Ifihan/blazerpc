@@ -114,7 +114,7 @@ class ProtoGenerator:
                 )
             else:
                 lines.append(
-                    f"  rpc Predict{name}({name}Request) " f"returns ({name}Response);"
+                    f"  rpc Predict{name}({name}Request) returns ({name}Response);"
                 )
         lines += ["}", ""]
         return lines

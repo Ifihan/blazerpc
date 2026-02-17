@@ -39,8 +39,7 @@ def load_app(import_string: str) -> Any:
 
     if not isinstance(app, BlazeApp):
         raise ConfigurationError(
-            f"'{import_string}' is not a BlazeApp instance "
-            f"(got {type(app).__name__})"
+            f"'{import_string}' is not a BlazeApp instance (got {type(app).__name__})"
         )
 
     return app
