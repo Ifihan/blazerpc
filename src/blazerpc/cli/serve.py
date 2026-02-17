@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from typing import Any
 
 from blazerpc.app import BlazeApp
@@ -22,6 +23,11 @@ def load_app(import_string: str) -> Any:
         )
 
     module_path, _, attr_name = import_string.partition(":")
+
+    # Ensure cwd is importable, like uvicorn/gunicorn do.
+    cwd = ""
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
 
     try:
         module = importlib.import_module(module_path)

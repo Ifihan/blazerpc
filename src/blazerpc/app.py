@@ -45,7 +45,7 @@ class BlazeApp:
         servicer = build_servicer(self.registry, batcher=self.batcher)
 
         health = build_health_service([servicer])
-        reflection_handlers = build_reflection_service(["blazerpc.InferenceService"])
+        reflection_handlers = build_reflection_service([servicer])
 
         handlers = [servicer, health, *reflection_handlers]
         server = GRPCServer(handlers)
