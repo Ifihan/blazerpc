@@ -8,16 +8,24 @@ becomes one RPC method on the ``InferenceService``.
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
+import json
 from typing import Any, Callable
 
+import numpy as np
 from grpclib.const import Cardinality, Handler
 from grpclib.server import Stream
 
 from blazerpc.codegen.proto import _sanitize_name
 from blazerpc.exceptions import InferenceError
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
-from blazerpc.runtime.serialization import python_to_proto
+from blazerpc.runtime.serialization import (
+    TensorProto,
+    deserialize_tensor,
+    serialize_tensor,
+)
+from blazerpc.types import _TensorType
 
 
 # ---------------------------------------------------------------------------
@@ -136,16 +144,58 @@ def _make_streaming_handler(model: ModelInfo) -> Callable[..., Any]:
 
 
 def _decode_request(raw: Any, model: ModelInfo) -> dict[str, Any]:
-    """Decode raw request data into keyword arguments for the model func."""
-    if isinstance(raw, dict):
-        return raw
+    """Decode raw request data into keyword arguments for the model func.
+
+    With the ``RawCodec``, *raw* arrives as JSON-encoded ``bytes``.
+    Tensor fields are represented as ``{"shape": [...], "dtype": "...",
+    "data": "<base64>"}`` and are converted back to numpy arrays.
+    """
     if raw is None:
         return {}
-    return {"__raw__": raw}
+    if isinstance(raw, dict):
+        return raw
+
+    data = json.loads(raw)
+    for field_name, field_type in model.input_types.items():
+        if field_name not in data:
+            continue
+        if isinstance(field_type, _TensorType) and isinstance(data[field_name], dict):
+            tensor_dict = data[field_name]
+            proto = TensorProto(
+                shape=tuple(tensor_dict["shape"]),
+                dtype=tensor_dict["dtype"],
+                data=base64.b64decode(tensor_dict["data"]),
+            )
+            data[field_name] = deserialize_tensor(proto)
+    return data
 
 
-def _encode_response(result: Any, model: ModelInfo) -> Any:
-    """Encode a model result into a wire-friendly representation."""
-    if model.output_type is not None:
-        return python_to_proto(result, model.output_type)
-    return result
+def _encode_response(result: Any, model: ModelInfo) -> bytes:
+    """Encode a model result into JSON bytes for the wire.
+
+    Tensor results (numpy arrays) are serialized as
+    ``{"shape": [...], "dtype": "...", "data": "<base64>"}``.
+    """
+    if isinstance(result, np.ndarray):
+        proto = serialize_tensor(result)
+        payload = {
+            "result": {
+                "shape": list(proto.shape),
+                "dtype": proto.dtype,
+                "data": base64.b64encode(proto.data).decode(),
+            }
+        }
+        return json.dumps(payload).encode()
+
+    if isinstance(result, _TensorType):
+        proto = serialize_tensor(result)
+        payload = {
+            "result": {
+                "shape": list(proto.shape),
+                "dtype": proto.dtype,
+                "data": base64.b64encode(proto.data).decode(),
+            }
+        }
+        return json.dumps(payload).encode()
+
+    return json.dumps({"result": result}).encode()
