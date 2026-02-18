@@ -77,7 +77,25 @@ blaze serve <app_path> [OPTIONS]
 | `--host`          | `str`   | `"0.0.0.0"`  | Host to bind to.                                     |
 | `--port`          | `int`   | `50051`       | Port to listen on.                                   |
 | `--workers`       | `int`   | `1`          | Number of worker processes.                          |
-| `--reload`        | `bool`  | `False`       | Enable auto-reload for development.                  |
+| `--reload`        | `bool`  | `False`       | Enable auto-reload for development. Requires `watchfiles`. |
+
+#### Hot reload
+
+When `--reload` is enabled, the server watches for `.py` file changes in the current directory and automatically restarts when changes are detected. This uses process-level restart (like uvicorn) for a clean reimport of all modules.
+
+```bash
+blaze serve app:app --reload
+```
+
+Install the reload dependency:
+
+```bash
+pip install blazerpc[reload]
+# or
+pip install watchfiles
+```
+
+The reload feature is intended for **development only** — do not use it in production.
 
 ### `blaze proto`
 
