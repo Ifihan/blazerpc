@@ -64,6 +64,51 @@ for model in app.registry.list_models():
 
 ---
 
+## `blazerpc.BlazeClient`
+
+Async gRPC client for calling BlazeRPC model endpoints.
+
+```python
+from blazerpc import BlazeClient
+
+async with BlazeClient("127.0.0.1", 50051) as client:
+    result = await client.predict("echo", text="hello")
+
+    async for chunk in client.stream("tokens", prompt="hi"):
+        print(chunk)
+```
+
+### Constructor
+
+| Parameter | Type  | Default       | Description       |
+| --------- | ----- | ------------- | ----------------- |
+| `host`    | `str` | `"127.0.0.1"` | Server address.  |
+| `port`    | `int` | `50051`       | Server port.      |
+
+### `await client.predict(model_name, **kwargs)`
+
+Make a unary prediction call. Returns the model's result value.
+
+| Parameter    | Type  | Description                              |
+| ------------ | ----- | ---------------------------------------- |
+| `model_name` | `str` | The registered model name.               |
+| `**kwargs`   | `Any` | Input fields passed as JSON to the model. |
+
+### `async for chunk in client.stream(model_name, **kwargs)`
+
+Make a server-streaming call. Yields each chunk's result value.
+
+| Parameter    | Type  | Description                              |
+| ------------ | ----- | ---------------------------------------- |
+| `model_name` | `str` | The registered model name.               |
+| `**kwargs`   | `Any` | Input fields passed as JSON to the model. |
+
+### `client.close()`
+
+Close the underlying gRPC channel. Also called automatically when using the async context manager.
+
+---
+
 ## `blazerpc.TensorInput`
 
 Type annotation for tensor-typed model inputs. Used by the codegen layer to emit `TensorProto` fields.
@@ -261,14 +306,14 @@ from blazerpc.codegen.proto import ProtoGenerator
 proto_content = ProtoGenerator().generate(app.registry)
 ```
 
-### `blazerpc.codegen.servicer.build_servicer(registry, batcher=None)`
+### `blazerpc.codegen.servicer.build_servicer(registry, batchers=None)`
 
 Builds a grpclib-compatible `InferenceServicer` from a `ModelRegistry`.
 
 ```python
 from blazerpc.codegen.servicer import build_servicer
 
-servicer = build_servicer(app.registry, batcher=app.batcher)
+servicer = build_servicer(app.registry, batchers={"my_model": batcher})
 ```
 
 ---
