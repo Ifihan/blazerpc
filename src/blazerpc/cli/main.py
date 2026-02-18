@@ -9,6 +9,7 @@ import typer
 
 from blazerpc.cli.proto import export_proto
 from blazerpc.cli.serve import load_app
+from blazerpc.cli.reload import run_with_reload
 
 app = typer.Typer(
     name="blaze",
@@ -30,6 +31,15 @@ def serve(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if reload:
+        typer.echo("")
+        typer.echo("⚡ BlazeRPC server starting (reload mode)...")
+        typer.echo("  ✓ Watching for changes in current directory")
+        typer.echo(f"  ✓ Server will listen on {host}:{port}")
+        typer.echo("")
+        run_with_reload(app_path, host, port)
+        return
 
     blaze_app = load_app(app_path)
 

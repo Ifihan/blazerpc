@@ -23,6 +23,7 @@ dependencies = [
 pytorch = ["torch>=2.0.0"]
 tensorflow = ["tensorflow>=2.14.0"]
 onnx = ["onnxruntime>=1.16.0"]
+reload = ["watchfiles>=1.0.0"]
 all = ["blazerpc[pytorch,tensorflow,onnx]"]
 dev = [
     "pytest>=7.4.0",
@@ -30,6 +31,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "ruff>=0.9.0",
     "mypy>=1.7.0",
+    "watchfiles>=1.0.0",
 ]
 docs = [
     "mkdocs>=1.5.0",
