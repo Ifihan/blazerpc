@@ -11,12 +11,12 @@ from blazerpc.exceptions import ModelNotFoundError
 def test_app_creation() -> None:
     app = BlazeApp()
     assert app.name == "blazerpc"
-    assert app.batcher is not None
+    assert app.enable_batching is True
 
 
 def test_app_creation_no_batching() -> None:
     app = BlazeApp(enable_batching=False)
-    assert app.batcher is None
+    assert app.enable_batching is False
 
 
 def test_model_decorator(app: BlazeApp) -> None:
