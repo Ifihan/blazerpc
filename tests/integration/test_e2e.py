@@ -272,3 +272,40 @@ async def test_async_model_over_wire() -> None:
         channel.close()
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_unary_with_batching_over_wire() -> None:
+    """Batched model works end-to-end with per-model batcher lifecycle."""
+    from blazerpc.runtime.batcher import Batcher
+    from blazerpc.app import _make_batch_inference_fn
+
+    app = BlazeApp(enable_batching=True, max_batch_size=4)
+
+    @app.model("add")
+    def add(a: float, b: float) -> float:
+        return a + b
+
+    # Simulate what app.serve() does: create per-model batcher and start it
+    model = app.registry.get("add")
+    batcher = Batcher(app.max_batch_size, app.batch_timeout_ms)
+    await batcher.start(_make_batch_inference_fn(model))
+
+    servicer = build_servicer(app.registry, batchers={"add": batcher})
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    channel = Channel("127.0.0.1", port, codec=RawCodec())
+    try:
+        response = await _unary_call(
+            channel,
+            "/blazerpc.InferenceService/PredictAdd",
+            {"a": 10.0, "b": 20.0},
+        )
+        assert response["result"] == 30.0
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
+        await batcher.stop()

@@ -46,10 +46,10 @@ class InferenceServicer:
         self,
         registry: ModelRegistry,
         *,
-        batcher: Any | None = None,
+        batchers: dict[str, Any] | None = None,
     ) -> None:
         self._registry = registry
-        self._batcher = batcher
+        self._batchers = batchers or {}
 
     def __mapping__(self) -> dict[str, Handler]:
         mapping: dict[str, Handler] = {}
@@ -61,7 +61,8 @@ class InferenceServicer:
                 handler_fn = _make_streaming_handler(model)
                 cardinality = Cardinality.UNARY_STREAM
             else:
-                handler_fn = _make_unary_handler(model, batcher=self._batcher)
+                batcher = self._batchers.get(model.name)
+                handler_fn = _make_unary_handler(model, batcher=batcher)
                 cardinality = Cardinality.UNARY_UNARY
 
             mapping[path] = Handler(
@@ -76,10 +77,10 @@ class InferenceServicer:
 def build_servicer(
     registry: ModelRegistry,
     *,
-    batcher: Any | None = None,
+    batchers: dict[str, Any] | None = None,
 ) -> InferenceServicer:
     """Convenience factory that returns a ready-to-use servicer."""
-    return InferenceServicer(registry, batcher=batcher)
+    return InferenceServicer(registry, batchers=batchers)
 
 
 # ---------------------------------------------------------------------------
