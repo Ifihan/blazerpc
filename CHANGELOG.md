@@ -4,6 +4,20 @@ All notable changes to BlazeRPC are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-02-22
+
+### Added
+
+- `OTelMetricsMiddleware` for pushing RPC metrics via the OpenTelemetry Metrics
+  API. Exports `blazerpc.rpc.count` (Counter) and `blazerpc.rpc.duration`
+  (Histogram). Accepts an optional custom `Meter` instance for configuring
+  exporters.
+- Middleware configuration on `BlazeApp` and `GRPCServer` via a new `middleware`
+  parameter. Middleware instances are automatically attached to the gRPC server
+  on startup.
+- `otel` optional dependency group (`opentelemetry-sdk`, `opentelemetry-exporter-otlp`)
+  for push-based telemetry. Install with `pip install blazerpc[otel]`.
+
 ## [1.0.0] - 2026-02-16
 
 First stable release of BlazeRPC.
@@ -11,6 +25,7 @@ First stable release of BlazeRPC.
 ### Added
 
 #### Core
+
 - `BlazeApp` class with `@app.model()` decorator for registering inference
   endpoints from plain Python functions.
 - Automatic `.proto` file generation from function type annotations. Supported
@@ -23,6 +38,7 @@ First stable release of BlazeRPC.
   `ConfigurationError`.
 
 #### Server
+
 - Async gRPC server built on grpclib with signal handling (SIGINT, SIGTERM)
   and configurable graceful shutdown.
 - gRPC health checking protocol (`grpc.health.v1.Health`), registered
@@ -35,6 +51,7 @@ First stable release of BlazeRPC.
   (`streaming=True`).
 
 #### Code generation
+
 - `ProtoGenerator` produces valid proto3 from a `ModelRegistry`, including
   `TensorProto`, per-model request/response messages, and an
   `InferenceService` with unary and server-streaming RPCs.
@@ -43,6 +60,7 @@ First stable release of BlazeRPC.
   decoding, model execution, and response encoding.
 
 #### CLI
+
 - `blaze serve <app_path>` -- Start the gRPC server with a startup banner
   listing all loaded models.
 - `blaze proto <app_path>` -- Export the generated `.proto` file to disk.
@@ -50,6 +68,7 @@ First stable release of BlazeRPC.
   async performance.
 
 #### Middleware
+
 - `Middleware` abstract base class built on grpclib's event system
   (`RecvRequest` / `SendTrailingMetadata`).
 - `LoggingMiddleware` -- Logs every RPC call with method name, peer address,
@@ -61,6 +80,7 @@ First stable release of BlazeRPC.
   mapping.
 
 #### Framework integrations
+
 - **PyTorch**: `torch_to_numpy()`, `numpy_to_torch()`, and `@torch_model`
   decorator for automatic tensor conversion with device placement.
 - **TensorFlow**: `tf_to_numpy()`, `numpy_to_tf()`, and `@tf_model`
@@ -69,12 +89,14 @@ First stable release of BlazeRPC.
   `predict_dict()` methods for session management.
 
 #### Serialization
+
 - `TensorProto` dataclass for zero-copy tensor serialization via
   `np.ndarray.tobytes()` / `np.frombuffer()`.
 - `python_to_proto()` and `proto_to_python()` for scalar and collection
   type conversion.
 
 #### Testing
+
 - 91 tests covering all modules: types, serialization, codegen, executor,
   server, CLI, batcher, health, middleware, and framework integrations.
 - Integration tests verifying full register-serve-call flows with grpclib's
