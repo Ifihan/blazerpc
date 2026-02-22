@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from grpclib.encoding.base import CodecBase
 from grpclib.server import Server
+
+if TYPE_CHECKING:
+    from blazerpc.server.middleware import Middleware
 
 log = logging.getLogger("blazerpc.server")
 
@@ -42,9 +45,11 @@ class GRPCServer:
         self,
         handlers: Sequence[Any],
         *,
+        middleware: Sequence[Middleware] | None = None,
         grace_period: float = 5.0,
     ) -> None:
         self._handlers = list(handlers)
+        self._middleware = list(middleware or [])
         self._grace_period = grace_period
         self._server: Server | None = None
         self._shutdown_event: asyncio.Event = asyncio.Event()
@@ -56,6 +61,8 @@ class GRPCServer:
     ) -> None:
         """Start serving and block until shutdown is requested."""
         self._server = Server(self._handlers, codec=RawCodec())
+        for mw in self._middleware:
+            mw.attach(self._server)
         await self._server.start(host, port)
 
         log.info("Server listening on %s:%d", host, port)

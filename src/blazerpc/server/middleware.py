@@ -21,6 +21,7 @@ from abc import ABC, abstractmethod
 
 from grpclib.events import RecvRequest, SendTrailingMetadata, listen
 from grpclib.server import Server
+from opentelemetry import metrics as otel_metrics
 from prometheus_client import Counter, Histogram
 
 log = logging.getLogger("blazerpc.middleware")
@@ -126,6 +127,56 @@ class MetricsMiddleware(Middleware):
         status_str = str(event.status.value) if event.status else "0"
         _REQUEST_COUNT.labels(method=method, status=status_str).inc()
         _REQUEST_DURATION.labels(method=method).observe(duration)
+
+
+# ---------------------------------------------------------------------------
+# Metrics middleware (OpenTelemetry)
+# ---------------------------------------------------------------------------
+
+
+class OTelMetricsMiddleware(Middleware):
+    """Pushes RPC metrics via the OpenTelemetry Metrics API.
+
+    Exported instruments:
+
+    - ``blazerpc.rpc.count`` – Counter with attributes ``method``, ``status``
+    - ``blazerpc.rpc.duration`` – Histogram (seconds) with attribute ``method``
+
+    Pass a custom :class:`opentelemetry.metrics.Meter` to control which
+    ``MeterProvider`` (and therefore which exporter) is used.  When *meter*
+    is ``None`` the global meter provider is used.
+    """
+
+    def __init__(self, meter: otel_metrics.Meter | None = None) -> None:
+        self._timings: dict[int, tuple[str, float]] = {}
+        if meter is None:
+            m = otel_metrics.get_meter("blazerpc")
+        else:
+            m = meter
+        self._request_count = m.create_counter(
+            "blazerpc.rpc.count",
+            description="Total number of gRPC requests",
+        )
+        self._request_duration = m.create_histogram(
+            "blazerpc.rpc.duration",
+            unit="s",
+            description="RPC request duration in seconds",
+        )
+
+    async def on_request(self, event: RecvRequest) -> None:
+        key = id(event.metadata)
+        self._timings[key] = (event.method_name, time.perf_counter())
+
+    async def on_response(self, event: SendTrailingMetadata) -> None:
+        key = id(event.metadata)
+        entry = self._timings.pop(key, None)
+        if entry is None:
+            return
+        method, start = entry
+        duration = time.perf_counter() - start
+        status_str = str(event.status.value) if event.status else "0"
+        self._request_count.add(1, {"method": method, "status": status_str})
+        self._request_duration.record(duration, {"method": method})
 
 
 # ---------------------------------------------------------------------------

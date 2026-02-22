@@ -1,6 +1,6 @@
 [project]
 name = "blazerpc"
-version = "1.0.0"
+version = "1.1.0"
 description = "A lightweight, framework-agnostic gRPC library for machine learning inference"
 readme = "README.md"
 license = "MIT"
@@ -23,8 +23,12 @@ dependencies = [
 pytorch = ["torch>=2.0.0"]
 tensorflow = ["tensorflow>=2.14.0"]
 onnx = ["onnxruntime>=1.16.0"]
+otel = [
+    "opentelemetry-sdk>=1.22.0",
+    "opentelemetry-exporter-otlp>=1.22.0",
+]
 reload = ["watchfiles>=1.0.0"]
-all = ["blazerpc[pytorch,tensorflow,onnx]"]
+all = ["blazerpc[pytorch,tensorflow,onnx,otel]"]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",

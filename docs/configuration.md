@@ -8,21 +8,24 @@ These parameters are passed when you create the application instance.
 
 ```python
 from blazerpc import BlazeApp
+from blazerpc.server.middleware import LoggingMiddleware, MetricsMiddleware
 
 app = BlazeApp(
     name="my-service",
     enable_batching=True,
     max_batch_size=32,
     batch_timeout_ms=10.0,
+    middleware=[LoggingMiddleware(), MetricsMiddleware()],
 )
 ```
 
-| Parameter          | Type    | Default      | Description                                                          |
-| ------------------ | ------- | ------------ | -------------------------------------------------------------------- |
-| `name`             | `str`   | `"blazerpc"` | Application name. Used in logging output and diagnostics.            |
-| `enable_batching`  | `bool`  | `True`       | Enable adaptive request batching. Set to `False` for unbatched processing. |
-| `max_batch_size`   | `int`   | `32`         | Maximum number of requests collected into a single batch.            |
-| `batch_timeout_ms` | `float` | `10.0`       | Maximum time (in milliseconds) to wait for a full batch before dispatching a partial one. Lower values reduce latency; higher values improve throughput. |
+| Parameter          | Type                       | Default      | Description                                                          |
+| ------------------ | -------------------------- | ------------ | -------------------------------------------------------------------- |
+| `name`             | `str`                      | `"blazerpc"` | Application name. Used in logging output and diagnostics.            |
+| `enable_batching`  | `bool`                     | `True`       | Enable adaptive request batching. Set to `False` for unbatched processing. |
+| `max_batch_size`   | `int`                      | `32`         | Maximum number of requests collected into a single batch.            |
+| `batch_timeout_ms` | `float`                    | `10.0`       | Maximum time (in milliseconds) to wait for a full batch before dispatching a partial one. Lower values reduce latency; higher values improve throughput. |
+| `middleware`       | `list[Middleware] \| None` | `None`       | List of middleware instances to attach to the gRPC server on startup. |
 
 ## `@app.model()` decorator
 
@@ -47,14 +50,15 @@ These parameters control the underlying gRPC server behavior. They are set inter
 ```python
 from blazerpc.server.grpc import GRPCServer
 
-server = GRPCServer(handlers, grace_period=5.0)
+server = GRPCServer(handlers, middleware=[...], grace_period=5.0)
 await server.start(host="0.0.0.0", port=50051)
 ```
 
-| Parameter      | Type             | Default | Description                                                     |
-| -------------- | ---------------- | ------- | --------------------------------------------------------------- |
-| `handlers`     | `Sequence[Any]`  | required | List of grpclib-compatible handler objects (servicers).          |
-| `grace_period` | `float`          | `5.0`   | Seconds to wait for in-flight requests to complete during shutdown. After this period, the server shuts down forcefully. |
+| Parameter      | Type                           | Default  | Description                                                     |
+| -------------- | ------------------------------ | -------- | --------------------------------------------------------------- |
+| `handlers`     | `Sequence[Any]`                | required | List of grpclib-compatible handler objects (servicers).          |
+| `middleware`   | `Sequence[Middleware] \| None` | `None`   | Middleware instances attached to the server before it starts listening. |
+| `grace_period` | `float`                        | `5.0`    | Seconds to wait for in-flight requests to complete during shutdown. After this period, the server shuts down forcefully. |
 
 ### `server.start()` parameters
 
@@ -137,3 +141,35 @@ When `MetricsMiddleware` is attached, the following metrics are exported:
 | `blazerpc_request_duration_seconds`  | Histogram | `method`           | Request duration in seconds. |
 
 These are standard `prometheus_client` objects. Expose them via a Prometheus scrape endpoint (e.g., using `prometheus_client.start_http_server()`).
+
+## OpenTelemetry metrics
+
+When `OTelMetricsMiddleware` is attached, the following instruments are exported via the OpenTelemetry Metrics API:
+
+| Instrument name         | Type      | Attributes         | Description              |
+| ----------------------- | --------- | ------------------ | ------------------------ |
+| `blazerpc.rpc.count`    | Counter   | `method`, `status` | Total number of gRPC requests. |
+| `blazerpc.rpc.duration` | Histogram | `method`           | Request duration in seconds. |
+
+Install the optional OTel dependencies:
+
+```bash
+pip install blazerpc[otel]
+```
+
+By default the global meter provider is used. To push to a specific backend, pass a custom `Meter`:
+
+```python
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from blazerpc.server.middleware import OTelMetricsMiddleware
+
+reader = PeriodicExportingMetricReader(
+    OTLPMetricExporter(endpoint="http://otel-collector:4317")
+)
+provider = MeterProvider(metric_readers=[reader])
+meter = provider.get_meter("blazerpc")
+
+app = BlazeApp(middleware=[OTelMetricsMiddleware(meter=meter)])
+```

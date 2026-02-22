@@ -17,6 +17,7 @@ from blazerpc.server.middleware import (
     LoggingMiddleware,
     MetricsMiddleware,
     Middleware,
+    OTelMetricsMiddleware,
 )
 
 
@@ -143,3 +144,77 @@ async def test_exception_middleware_is_noop() -> None:
 
     await mw.on_request(req_event)
     await mw.on_response(resp_event)
+
+
+# ---------------------------------------------------------------------------
+# OTelMetricsMiddleware
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_otel_metrics_middleware_records() -> None:
+    """OTelMetricsMiddleware should track request count and duration."""
+    mw = OTelMetricsMiddleware()
+
+    req_event = MagicMock(spec=RecvRequest)
+    req_event.method_name = "/blazerpc.InferenceService/PredictEcho"
+    req_event.metadata = {}
+
+    await mw.on_request(req_event)
+
+    resp_event = MagicMock(spec=SendTrailingMetadata)
+    resp_event.metadata = req_event.metadata
+    resp_event.status = Status.OK
+
+    await mw.on_response(resp_event)
+
+    # Timing entry should be consumed
+    assert len(mw._timings) == 0
+
+
+@pytest.mark.asyncio
+async def test_otel_metrics_middleware_missing_timing() -> None:
+    """OTelMetricsMiddleware handles missing timing gracefully."""
+    mw = OTelMetricsMiddleware()
+
+    resp_event = MagicMock(spec=SendTrailingMetadata)
+    resp_event.metadata = {"new": True}
+    resp_event.status = Status.OK
+
+    await mw.on_response(resp_event)
+
+
+@pytest.mark.asyncio
+async def test_otel_metrics_middleware_custom_meter() -> None:
+    """OTelMetricsMiddleware accepts a custom Meter."""
+    mock_meter = MagicMock()
+    mock_meter.create_counter.return_value = MagicMock()
+    mock_meter.create_histogram.return_value = MagicMock()
+
+    mw = OTelMetricsMiddleware(meter=mock_meter)
+
+    mock_meter.create_counter.assert_called_once_with(
+        "blazerpc.rpc.count",
+        description="Total number of gRPC requests",
+    )
+    mock_meter.create_histogram.assert_called_once_with(
+        "blazerpc.rpc.duration",
+        unit="s",
+        description="RPC request duration in seconds",
+    )
+
+    # Verify instruments are used on request/response
+    req_event = MagicMock(spec=RecvRequest)
+    req_event.method_name = "/blazerpc.InferenceService/PredictEcho"
+    req_event.metadata = {}
+
+    await mw.on_request(req_event)
+
+    resp_event = MagicMock(spec=SendTrailingMetadata)
+    resp_event.metadata = req_event.metadata
+    resp_event.status = Status.OK
+
+    await mw.on_response(resp_event)
+
+    mw._request_count.add.assert_called_once()
+    mw._request_duration.record.assert_called_once()

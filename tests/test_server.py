@@ -10,6 +10,7 @@ from grpclib.server import Server
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.server.grpc import GRPCServer
+from blazerpc.server.middleware import LoggingMiddleware
 
 
 def _make_server() -> tuple[BlazeApp, GRPCServer]:
@@ -50,3 +51,18 @@ async def test_grpc_server_stop_when_not_started() -> None:
     """Calling stop() before start() should be a no-op."""
     _, server = _make_server()
     await server.stop()  # should not raise
+
+
+def test_grpc_server_accepts_middleware() -> None:
+    """GRPCServer should accept a middleware list."""
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        return text
+
+    servicer = build_servicer(app.registry)
+    mw = LoggingMiddleware()
+    server = GRPCServer([servicer], middleware=[mw])
+
+    assert server._middleware == [mw]

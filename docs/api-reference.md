@@ -21,12 +21,13 @@ app = BlazeApp(
 
 ### Constructor
 
-| Parameter          | Type    | Default      | Description                                          |
-| ------------------ | ------- | ------------ | ---------------------------------------------------- |
-| `name`             | `str`   | `"blazerpc"` | Application name (used in logging and diagnostics).  |
-| `enable_batching`  | `bool`  | `True`       | Enable adaptive request batching.                    |
-| `max_batch_size`   | `int`   | `32`         | Maximum number of requests in a single batch.        |
-| `batch_timeout_ms` | `float` | `10.0`       | Maximum time (ms) to wait before dispatching a partial batch. |
+| Parameter          | Type                    | Default      | Description                                          |
+| ------------------ | ----------------------- | ------------ | ---------------------------------------------------- |
+| `name`             | `str`                   | `"blazerpc"` | Application name (used in logging and diagnostics).  |
+| `enable_batching`  | `bool`                  | `True`       | Enable adaptive request batching.                    |
+| `max_batch_size`   | `int`                   | `32`         | Maximum number of requests in a single batch.        |
+| `batch_timeout_ms` | `float`                 | `10.0`       | Maximum time (ms) to wait before dispatching a partial batch. |
+| `middleware`       | `list[Middleware] \| None` | `None`    | List of middleware instances to attach on server startup. |
 
 ### `app.model(name, version="1", streaming=False)`
 
@@ -213,14 +214,15 @@ Deserialize a `TensorProto` back to a NumPy array. Uses `np.frombuffer()` for ze
 Production-ready async gRPC server. Wraps `grpclib.server.Server` with signal handling and graceful shutdown.
 
 ```python
-server = GRPCServer(handlers, grace_period=5.0)
+server = GRPCServer(handlers, middleware=[...], grace_period=5.0)
 await server.start(host="0.0.0.0", port=50051)
 ```
 
-| Constructor parameter | Type    | Default | Description                                |
-| --------------------- | ------- | ------- | ------------------------------------------ |
-| `handlers`            | `Sequence[Any]` | required | List of grpclib-compatible handlers. |
-| `grace_period`        | `float` | `5.0`   | Seconds to wait for in-flight requests during shutdown. |
+| Constructor parameter | Type                           | Default | Description                                |
+| --------------------- | ------------------------------ | ------- | ------------------------------------------ |
+| `handlers`            | `Sequence[Any]`                | required | List of grpclib-compatible handlers. |
+| `middleware`          | `Sequence[Middleware] \| None` | `None`  | Middleware instances attached to the server before it starts listening. |
+| `grace_period`        | `float`                        | `5.0`   | Seconds to wait for in-flight requests during shutdown. |
 
 ### `build_health_service(servicers=None) -> Health`
 
@@ -259,6 +261,19 @@ Exports Prometheus metrics:
 
 - `blazerpc_requests_total{method, status}` -- Counter of total requests.
 - `blazerpc_request_duration_seconds{method}` -- Histogram of request durations.
+
+### `OTelMetricsMiddleware`
+
+Pushes RPC metrics via the OpenTelemetry Metrics API. Install with `pip install blazerpc[otel]`.
+
+| Constructor parameter | Type                  | Default | Description                                |
+| --------------------- | --------------------- | ------- | ------------------------------------------ |
+| `meter`               | `Meter \| None`       | `None`  | Custom OTel `Meter`. Uses global meter provider if `None`. |
+
+Instruments:
+
+- `blazerpc.rpc.count` -- Counter with attributes `method`, `status`.
+- `blazerpc.rpc.duration` -- Histogram (seconds) with attribute `method`.
 
 ### `ExceptionMiddleware`
 
