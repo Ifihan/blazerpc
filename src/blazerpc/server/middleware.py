@@ -147,9 +147,7 @@ class OTelMetricsMiddleware(Middleware):
     is ``None`` the global meter provider is used.
     """
 
-    def __init__(
-        self, meter: otel_metrics.Meter | None = None
-    ) -> None:
+    def __init__(self, meter: otel_metrics.Meter | None = None) -> None:
         self._timings: dict[int, tuple[str, float]] = {}
         m = meter or otel_metrics.get_meter("blazerpc")
         self._request_count = m.create_counter(
@@ -174,12 +172,8 @@ class OTelMetricsMiddleware(Middleware):
         method, start = entry
         duration = time.perf_counter() - start
         status_str = str(event.status.value) if event.status else "0"
-        self._request_count.add(
-            1, {"method": method, "status": status_str}
-        )
-        self._request_duration.record(
-            duration, {"method": method}
-        )
+        self._request_count.add(1, {"method": method, "status": status_str})
+        self._request_duration.record(duration, {"method": method})
 
 
 # ---------------------------------------------------------------------------
