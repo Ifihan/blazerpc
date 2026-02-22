@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security Vulnerability
+    url: mailto:victoriaolusheye@gmail.com
+    about: Please report security vulnerabilities via email (do not create a public issue)
+  - name: Documentation
+    url: https://ifihan.github.io/blazerpc
+    about: Check the documentation for guides and API reference

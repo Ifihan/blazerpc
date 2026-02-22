@@ -1,0 +1,105 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in BlazeRPC
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please provide as much detail as possible.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear description of what the bug is.
+      placeholder: When I try to... it does... instead of...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Create a BlazeApp with...
+        2. Register a model that...
+        3. Start the server with...
+        4. Send a request to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: Output of `python --version`
+      placeholder: "3.11.5"
+    validations:
+      required: true
+
+  - type: input
+    id: blazerpc-version
+    attributes:
+      label: BlazeRPC Version
+      description: Output of `pip show blazerpc` or commit hash
+      placeholder: "1.0.0"
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of BlazeRPC is affected?
+      options:
+        - Server / gRPC
+        - Client (BlazeClient)
+        - Batching
+        - Code generation / Proto
+        - CLI (blaze serve / blaze proto)
+        - Serialization
+        - Framework integration (PyTorch/TF/ONNX)
+        - Middleware
+        - Hot Reload
+        - Other
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Logs
+      description: Paste any relevant error output or stack traces.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any other information that might help (model code snippets, proto files, etc.).
