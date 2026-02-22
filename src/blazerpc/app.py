@@ -10,6 +10,7 @@ from blazerpc.runtime.batcher import Batcher
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
 from blazerpc.server.grpc import GRPCServer
 from blazerpc.server.health import build_health_service
+from blazerpc.server.middleware import Middleware
 from blazerpc.server.reflection import build_reflection_service
 
 
@@ -36,12 +37,14 @@ class BlazeApp:
         enable_batching: bool = True,
         max_batch_size: int = 32,
         batch_timeout_ms: float = 10.0,
+        middleware: list[Middleware] | None = None,
     ):
         self.name = name
         self.registry = ModelRegistry()
         self.enable_batching = enable_batching
         self.max_batch_size = max_batch_size
         self.batch_timeout_ms = batch_timeout_ms
+        self.middleware: list[Middleware] = middleware or []
 
     def model(
         self,
@@ -74,7 +77,7 @@ class BlazeApp:
         reflection_handlers = build_reflection_service([servicer])
 
         handlers = [servicer, health, *reflection_handlers]
-        server = GRPCServer(handlers)
+        server = GRPCServer(handlers, middleware=self.middleware)
 
         try:
             await server.start(host, port)

@@ -6,6 +6,7 @@ import pytest
 
 from blazerpc.app import BlazeApp
 from blazerpc.exceptions import ModelNotFoundError
+from blazerpc.server.middleware import LoggingMiddleware
 
 
 def test_app_creation() -> None:
@@ -45,3 +46,14 @@ def test_model_decorator_stores_type_info(app: BlazeApp) -> None:
 def test_model_not_found(app: BlazeApp) -> None:
     with pytest.raises(ModelNotFoundError):
         app.registry.get("nonexistent")
+
+
+def test_app_accepts_middleware() -> None:
+    mw = LoggingMiddleware()
+    app = BlazeApp(middleware=[mw])
+    assert app.middleware == [mw]
+
+
+def test_app_middleware_defaults_to_empty() -> None:
+    app = BlazeApp()
+    assert app.middleware == []
