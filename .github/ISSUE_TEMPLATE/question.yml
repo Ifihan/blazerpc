@@ -1,0 +1,52 @@
+name: Question
+description: Ask a question about BlazeRPC
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question? We're happy to help!
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: What would you like to know?
+      placeholder: How do I...? Why does...? Can I...?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Question Category
+      options:
+        - Installation & Setup
+        - Usage & API
+        - Model Serving
+        - Batching & Performance
+        - Streaming
+        - Framework Integration (PyTorch/TF/ONNX)
+        - Client (BlazeClient)
+        - Configuration & Deployment
+        - Contributing
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any relevant code, configuration, or background information.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched existing issues and discussions
+          required: true
+        - label: I have reviewed the [documentation](https://ifihan.github.io/blazerpc)
+          required: true
