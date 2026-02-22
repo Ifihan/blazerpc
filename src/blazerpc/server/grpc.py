@@ -9,12 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from grpclib.encoding.base import CodecBase
 from grpclib.server import Server
 
-from blazerpc.server.middleware import Middleware
+if TYPE_CHECKING:
+    from blazerpc.server.middleware import Middleware
 
 log = logging.getLogger("blazerpc.server")
 

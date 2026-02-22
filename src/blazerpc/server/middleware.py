@@ -149,7 +149,10 @@ class OTelMetricsMiddleware(Middleware):
 
     def __init__(self, meter: otel_metrics.Meter | None = None) -> None:
         self._timings: dict[int, tuple[str, float]] = {}
-        m = meter or otel_metrics.get_meter("blazerpc")
+        if meter is None:
+            m = otel_metrics.get_meter("blazerpc")
+        else:
+            m = meter
         self._request_count = m.create_counter(
             "blazerpc.rpc.count",
             description="Total number of gRPC requests",

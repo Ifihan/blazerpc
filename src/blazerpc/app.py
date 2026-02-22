@@ -44,7 +44,10 @@ class BlazeApp:
         self.enable_batching = enable_batching
         self.max_batch_size = max_batch_size
         self.batch_timeout_ms = batch_timeout_ms
-        self.middleware: list[Middleware] = middleware or []
+        if middleware is None:
+            self.middleware: list[Middleware] = []
+        else:
+            self.middleware = list(middleware)
 
     def model(
         self,
