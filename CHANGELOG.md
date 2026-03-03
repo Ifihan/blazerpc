@@ -4,6 +4,33 @@ All notable changes to BlazeRPC are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-03
+
+### Breaking Changes
+
+- **Wire format changed from JSON to binary Protobuf.** The server now sends and
+  receives real Protobuf-encoded messages using `betterproto` message classes built
+  at runtime from model type annotations. Standard gRPC clients (Postman, `grpcurl`,
+  generated stubs) now work without patches.
+- **`BlazeClient` requires a `registry` parameter.** Pass `registry=app.registry`
+  when constructing `BlazeClient` so it can build the correct Protobuf message
+  classes for each model. The previous dict-based JSON API is removed.
+- **Streaming model functions must declare a return type annotation** (`-> ChunkType`)
+  so BlazeRPC can build the correct Protobuf response message class.
+
+### Added
+
+- `src/blazerpc/codegen/proto_types.py` — dynamic `betterproto.Message` class
+  builder. Generates `(RequestClass, ResponseClass)` pairs at startup from
+  `ModelInfo` without requiring a `protoc` code-generation step.
+
+### Changed
+
+- `RawCodec` is retained as the pass-through codec mechanism, but now conveys
+  binary Protobuf bytes (encoded by betterproto) rather than JSON.
+- `BlazeClient._ensure_channel()` no longer imports `RawCodec` from a separate
+  path; both client and server use the same `RawCodec` from `server.grpc`.
+
 ## [1.1.0] - 2026-02-22
 
 ### Added

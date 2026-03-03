@@ -21,10 +21,11 @@ log = logging.getLogger("blazerpc.server")
 
 
 class RawCodec(CodecBase):
-    """Pass-through codec that skips protobuf serialization.
+    """Pass-through codec that lets handlers manage their own serialization.
 
-    BlazeRPC handlers encode/decode messages themselves, so the codec
-    just forwards raw bytes without calling ``FromString``/``SerializeToString``.
+    BlazeRPC handlers encode/decode Protobuf messages themselves using
+    betterproto, so the codec simply forwards raw bytes without additional
+    processing.
     """
 
     __content_subtype__ = "proto"
@@ -32,7 +33,7 @@ class RawCodec(CodecBase):
     def encode(self, message: Any, message_type: Any) -> bytes:
         if isinstance(message, bytes):
             return message
-        return message
+        return bytes(message)
 
     def decode(self, data: bytes, message_type: Any) -> Any:
         return data

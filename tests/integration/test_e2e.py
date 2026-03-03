@@ -1,14 +1,12 @@
 """End-to-end integration tests.
 
 These tests verify full register → serve → call → response flows using
-grpclib's in-process server with RawCodec.
+grpclib's in-process server with real binary Protobuf encoding via betterproto.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 
 import numpy as np
 import pytest
@@ -17,6 +15,7 @@ from grpclib.const import Cardinality
 from grpclib.server import Server
 
 from blazerpc.app import BlazeApp
+from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.server.grpc import RawCodec
 from blazerpc.server.health import build_health_service
@@ -96,7 +95,7 @@ async def test_async_model_execution() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Wire-level tests: send JSON bytes through grpclib and verify responses
+# Wire-level tests: send Protobuf bytes through grpclib and verify responses
 # ---------------------------------------------------------------------------
 
 
@@ -108,19 +107,22 @@ def _get_server_port(server: Server) -> int:
 
 
 async def _unary_call(
-    channel: Channel, path: str, request_data: dict,
-) -> dict:
-    """Send a unary JSON request and return the parsed JSON response."""
+    channel: Channel,
+    path: str,
+    request_bytes: bytes,
+    response_cls: type,
+) -> object:
+    """Send a unary Protobuf request and return the parsed response message."""
     stream = channel.request(path, Cardinality.UNARY_UNARY, None, None)
     async with stream as s:
-        await s.send_message(json.dumps(request_data).encode(), end=True)
+        await s.send_message(request_bytes, end=True)
         response_bytes = await s.recv_message()
-    return json.loads(response_bytes)
+    return response_cls().parse(response_bytes)
 
 
 @pytest.mark.asyncio
 async def test_unary_echo_over_wire() -> None:
-    """Send a JSON request to an echo model and get JSON back."""
+    """Send a Protobuf request to an echo model and get Protobuf back."""
     app = BlazeApp(enable_batching=False)
 
     @app.model("echo")
@@ -132,14 +134,19 @@ async def test_unary_echo_over_wire() -> None:
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
+    model = app.registry.get("echo")
+    req_cls, resp_cls = build_message_classes(model)
+
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
+        request_bytes = bytes(req_cls(text="hello"))
         response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictEcho",
-            {"text": "hello"},
+            request_bytes,
+            resp_cls,
         )
-        assert response["result"] == "Echo: hello"
+        assert response.result == "Echo: hello"  # type: ignore[union-attr]
     finally:
         channel.close()
         server.close()
@@ -160,14 +167,19 @@ async def test_unary_add_over_wire() -> None:
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
+    model = app.registry.get("add")
+    req_cls, resp_cls = build_message_classes(model)
+
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
+        request_bytes = bytes(req_cls(a=2.5, b=3.5))
         response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictAdd",
-            {"a": 2.5, "b": 3.5},
+            request_bytes,
+            resp_cls,
         )
-        assert response["result"] == 6.0
+        assert abs(response.result - 6.0) < 1e-5  # type: ignore[union-attr]
     finally:
         channel.close()
         server.close()
@@ -188,14 +200,20 @@ async def test_unary_list_over_wire() -> None:
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
+    model = app.registry.get("sentiment")
+    req_cls, resp_cls = build_message_classes(model)
+
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
+        request_bytes = bytes(req_cls(text=["good", "bad"]))
         response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictSentiment",
-            {"text": ["good", "bad"]},
+            request_bytes,
+            resp_cls,
         )
-        assert response["result"] == [0.9, 0.9]
+        assert len(response.result) == 2  # type: ignore[union-attr]
+        assert all(abs(v - 0.9) < 1e-5 for v in response.result)  # type: ignore[union-attr]
     finally:
         channel.close()
         server.close()
@@ -204,7 +222,7 @@ async def test_unary_list_over_wire() -> None:
 
 @pytest.mark.asyncio
 async def test_unary_tensor_over_wire() -> None:
-    """Tensor inputs are base64-decoded, processed, and re-encoded."""
+    """Tensor inputs are Protobuf-encoded, processed, and decoded back."""
     app = BlazeApp(enable_batching=False)
 
     @app.model("double")
@@ -218,27 +236,24 @@ async def test_unary_tensor_over_wire() -> None:
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
+    model = app.registry.get("double")
+    req_cls, resp_cls = build_message_classes(model)
+
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
         arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
-        request = {
-            "data": {
-                "shape": list(arr.shape),
-                "dtype": "float",
-                "data": base64.b64encode(arr.tobytes()).decode(),
-            }
-        }
+        tp = _TensorProtoMsg(shape=list(arr.shape), dtype="float", data=arr.tobytes())
+        request_bytes = bytes(req_cls(data=tp))
         response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictDouble",
-            request,
+            request_bytes,
+            resp_cls,
         )
-        result_tensor = response["result"]
-        result_data = np.frombuffer(
-            base64.b64decode(result_tensor["data"]),
-            dtype=np.float32,
+        result_arr = np.frombuffer(
+            response.result.data, dtype=np.float32  # type: ignore[union-attr]
         )
-        np.testing.assert_array_equal(result_data, [2.0, 4.0, 6.0, 8.0])
+        np.testing.assert_array_equal(result_arr, [2.0, 4.0, 6.0, 8.0])
     finally:
         channel.close()
         server.close()
@@ -260,14 +275,19 @@ async def test_async_model_over_wire() -> None:
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
+    model = app.registry.get("async_echo")
+    req_cls, resp_cls = build_message_classes(model)
+
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
+        request_bytes = bytes(req_cls(text="world"))
         response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictAsyncEcho",
-            {"text": "world"},
+            request_bytes,
+            resp_cls,
         )
-        assert response["result"] == "async: world"
+        assert response.result == "async: world"  # type: ignore[union-attr]
     finally:
         channel.close()
         server.close()
@@ -277,8 +297,8 @@ async def test_async_model_over_wire() -> None:
 @pytest.mark.asyncio
 async def test_unary_with_batching_over_wire() -> None:
     """Batched model works end-to-end with per-model batcher lifecycle."""
-    from blazerpc.runtime.batcher import Batcher
     from blazerpc.app import _make_batch_inference_fn
+    from blazerpc.runtime.batcher import Batcher
 
     app = BlazeApp(enable_batching=True, max_batch_size=4)
 
@@ -286,7 +306,6 @@ async def test_unary_with_batching_over_wire() -> None:
     def add(a: float, b: float) -> float:
         return a + b
 
-    # Simulate what app.serve() does: create per-model batcher and start it
     model = app.registry.get("add")
     batcher = Batcher(app.max_batch_size, app.batch_timeout_ms)
     await batcher.start(_make_batch_inference_fn(model))
@@ -296,14 +315,18 @@ async def test_unary_with_batching_over_wire() -> None:
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
+    req_cls, resp_cls = build_message_classes(model)
+
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
+        request_bytes = bytes(req_cls(a=10.0, b=20.0))
         response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictAdd",
-            {"a": 10.0, "b": 20.0},
+            request_bytes,
+            resp_cls,
         )
-        assert response["result"] == 30.0
+        assert abs(response.result - 30.0) < 1e-5  # type: ignore[union-attr]
     finally:
         channel.close()
         server.close()

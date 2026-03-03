@@ -1,7 +1,7 @@
 """End-to-end integration tests for BlazeClient.
 
 These tests spin up an in-process gRPC server and use BlazeClient
-to make real calls over the wire.
+to make real calls over the wire using binary Protobuf encoding.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ async def test_client_predict_echo() -> None:
     port = _get_server_port(server)
 
     try:
-        async with BlazeClient("127.0.0.1", port) as client:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             result = await client.predict("echo", text="hello")
             assert result == "Echo: hello"
     finally:
@@ -60,9 +60,9 @@ async def test_client_predict_add() -> None:
     port = _get_server_port(server)
 
     try:
-        async with BlazeClient("127.0.0.1", port) as client:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             result = await client.predict("add", a=2.5, b=3.5)
-            assert result == 6.0
+            assert abs(result - 6.0) < 1e-5
     finally:
         server.close()
         await server.wait_closed()
@@ -74,7 +74,7 @@ async def test_client_stream() -> None:
     app = BlazeApp(enable_batching=False)
 
     @app.model("tokens", streaming=True)
-    async def generate(prompt: str):
+    async def generate(prompt: str) -> str:
         for token in ["hello", " ", "world"]:
             yield token
 
@@ -84,7 +84,7 @@ async def test_client_stream() -> None:
     port = _get_server_port(server)
 
     try:
-        async with BlazeClient("127.0.0.1", port) as client:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             chunks = []
             async for chunk in client.stream("tokens", prompt="hi"):
                 chunks.append(chunk)

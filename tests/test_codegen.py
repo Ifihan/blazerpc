@@ -8,6 +8,7 @@ from grpclib.const import Cardinality
 
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.proto import ProtoGenerator, _sanitize_name, _type_to_proto_field
+from blazerpc.codegen.proto_types import build_message_classes
 from blazerpc.codegen.servicer import InferenceServicer, build_servicer
 from blazerpc.types import TensorInput, TensorOutput, _TensorType
 
@@ -246,3 +247,22 @@ class TestInferenceServicer:
         mapping = servicer.__mapping__()
         handler = mapping["/blazerpc.InferenceService/PredictSentiment"]
         assert handler.cardinality == Cardinality.UNARY_UNARY
+
+    def test_hyphenated_model_name_produces_valid_class(self) -> None:
+        """Hyphenated model names must produce valid Python identifiers."""
+        app = BlazeApp(enable_batching=False)
+
+        @app.model("iris-tf")
+        def predict(x: float) -> float:
+            return x
+
+        model = app.registry.get("iris-tf")
+        req_cls, resp_cls = build_message_classes(model)
+
+        # Class names must be valid PascalCase identifiers, not "Iris-tfRequest"
+        assert req_cls.__name__ == "IrisTfRequest"
+        assert resp_cls.__name__ == "IrisTfResponse"
+
+        # betterproto metaclass must initialise without AttributeError
+        msg = req_cls()
+        assert req_cls().parse(bytes(msg)) is not None
