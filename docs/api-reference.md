@@ -72,7 +72,7 @@ Async gRPC client for calling BlazeRPC model endpoints.
 ```python
 from blazerpc import BlazeClient
 
-async with BlazeClient("127.0.0.1", 50051) as client:
+async with BlazeClient("127.0.0.1", 50051, registry=app.registry) as client:
     result = await client.predict("echo", text="hello")
 
     async for chunk in client.stream("tokens", prompt="hi"):
@@ -81,28 +81,29 @@ async with BlazeClient("127.0.0.1", 50051) as client:
 
 ### Constructor
 
-| Parameter | Type  | Default       | Description       |
-| --------- | ----- | ------------- | ----------------- |
-| `host`    | `str` | `"127.0.0.1"` | Server address.  |
-| `port`    | `int` | `50051`       | Server port.      |
+| Parameter  | Type                    | Default       | Description                                                                 |
+| ---------- | ----------------------- | ------------- | --------------------------------------------------------------------------- |
+| `host`     | `str`                   | `"127.0.0.1"` | Server address.                                                             |
+| `port`     | `int`                   | `50051`       | Server port.                                                                |
+| `registry` | `ModelRegistry \| None` | `None`        | Model registry used to build Protobuf message classes. Required for `predict` and `stream`. Pass `app.registry`. |
 
 ### `await client.predict(model_name, **kwargs)`
 
-Make a unary prediction call. Returns the model's result value.
+Make a unary prediction call. Returns the model's result value, deserialized from the Protobuf response.
 
-| Parameter    | Type  | Description                              |
-| ------------ | ----- | ---------------------------------------- |
-| `model_name` | `str` | The registered model name.               |
-| `**kwargs`   | `Any` | Input fields passed as JSON to the model. |
+| Parameter    | Type  | Description                                    |
+| ------------ | ----- | ---------------------------------------------- |
+| `model_name` | `str` | The registered model name.                     |
+| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
 
 ### `async for chunk in client.stream(model_name, **kwargs)`
 
-Make a server-streaming call. Yields each chunk's result value.
+Make a server-streaming call. Yields each chunk's result value, deserialized from Protobuf.
 
-| Parameter    | Type  | Description                              |
-| ------------ | ----- | ---------------------------------------- |
-| `model_name` | `str` | The registered model name.               |
-| `**kwargs`   | `Any` | Input fields passed as JSON to the model. |
+| Parameter    | Type  | Description                                    |
+| ------------ | ----- | ---------------------------------------------- |
+| `model_name` | `str` | The registered model name.                     |
+| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
 
 ### `client.close()`
 
