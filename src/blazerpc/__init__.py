@@ -12,7 +12,7 @@ from blazerpc.exceptions import (
 )
 from blazerpc.types import TensorInput, TensorOutput
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 __all__ = [
     "BlazeApp",
     "BlazeClient",
