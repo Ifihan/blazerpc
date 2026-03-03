@@ -12,6 +12,7 @@ from typing import Any, List, get_args, get_origin
 
 import betterproto
 
+from blazerpc.codegen.proto import _sanitize_name
 from blazerpc.runtime.registry import ModelInfo
 from blazerpc.types import _TensorType
 
@@ -99,7 +100,7 @@ def build_message_classes(model: ModelInfo) -> tuple[type, type]:
 
     req_ns = {"__annotations__": req_annotations, **req_defaults}
     request_cls: type = dataclasses.dataclass(
-        type(f"{model.name.capitalize()}Request", (betterproto.Message,), req_ns)
+        type(f"{_sanitize_name(model.name)}Request", (betterproto.Message,), req_ns)
     )
 
     # ---- Response ----
@@ -113,7 +114,7 @@ def build_message_classes(model: ModelInfo) -> tuple[type, type]:
         res_ns = {"__annotations__": {}}
 
     response_cls: type = dataclasses.dataclass(
-        type(f"{model.name.capitalize()}Response", (betterproto.Message,), res_ns)
+        type(f"{_sanitize_name(model.name)}Response", (betterproto.Message,), res_ns)
     )
 
     return request_cls, response_cls
