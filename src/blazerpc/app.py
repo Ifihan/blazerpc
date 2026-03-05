@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, Callable
 
 from blazerpc.codegen.servicer import build_servicer
+from blazerpc.context import AppState
 from blazerpc.runtime.batcher import Batcher
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
 from blazerpc.server.grpc import GRPCServer
@@ -41,6 +42,7 @@ class BlazeApp:
     ):
         self.name = name
         self.registry = ModelRegistry()
+        self.state = AppState()
         self.enable_batching = enable_batching
         self.max_batch_size = max_batch_size
         self.batch_timeout_ms = batch_timeout_ms
@@ -74,7 +76,9 @@ class BlazeApp:
                 await batcher.start(_make_batch_inference_fn(model))
                 batchers[model.name] = batcher
 
-        servicer = build_servicer(self.registry, batchers=batchers)
+        servicer = build_servicer(
+            self.registry, batchers=batchers, app_state=self.state
+        )
 
         health = build_health_service([servicer])
         reflection_handlers = build_reflection_service([servicer])

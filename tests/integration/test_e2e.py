@@ -17,6 +17,7 @@ from grpclib.server import Server
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
 from blazerpc.codegen.servicer import build_servicer
+from blazerpc.context import Context, Depends
 from blazerpc.server.grpc import RawCodec
 from blazerpc.server.health import build_health_service
 from blazerpc.types import TensorInput, TensorOutput
@@ -332,3 +333,47 @@ async def test_unary_with_batching_over_wire() -> None:
         server.close()
         await server.wait_closed()
         await batcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_context_injection_over_wire() -> None:
+    """A handler using Context receives the correct gRPC method path."""
+    app = BlazeApp(enable_batching=False)
+    app.state.prefix = "CTX"
+
+    def get_prefix(ctx: Context) -> str:
+        return ctx.app_state.prefix
+
+    @app.model("ctx_echo")
+    def ctx_echo(
+        text: str,
+        ctx: Context,
+        prefix: str = Depends(get_prefix),
+    ) -> str:
+        return f"{prefix}:{ctx.method}:{text}"
+
+    servicer = build_servicer(app.registry, app_state=app.state)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    model = app.registry.get("ctx_echo")
+    req_cls, resp_cls = build_message_classes(model)
+
+    channel = Channel("127.0.0.1", port, codec=RawCodec())
+    try:
+        request_bytes = bytes(req_cls(text="hello"))
+        response = await _unary_call(
+            channel,
+            "/blazerpc.InferenceService/PredictCtxEcho",
+            request_bytes,
+            resp_cls,
+        )
+        result = response.result  # type: ignore[union-attr]
+        assert result.startswith("CTX:")
+        assert "/blazerpc.InferenceService/PredictCtxEcho" in result
+        assert result.endswith(":hello")
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()

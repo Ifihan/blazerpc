@@ -48,9 +48,11 @@ class InferenceServicer:
         registry: ModelRegistry,
         *,
         batchers: dict[str, Any] | None = None,
+        app_state: Any | None = None,
     ) -> None:
         self._registry = registry
         self._batchers = batchers or {}
+        self._app_state = app_state
 
     def __mapping__(self) -> dict[str, Handler]:
         mapping: dict[str, Handler] = {}
@@ -61,12 +63,23 @@ class InferenceServicer:
             request_cls, response_cls = build_message_classes(model)
 
             if model.streaming:
-                handler_fn = _make_streaming_handler(model, request_cls, response_cls)
+                handler_fn = _make_streaming_handler(
+                    model,
+                    request_cls,
+                    response_cls,
+                    method=path,
+                    app_state=self._app_state,
+                )
                 cardinality = Cardinality.UNARY_STREAM
             else:
                 batcher = self._batchers.get(model.name)
                 handler_fn = _make_unary_handler(
-                    model, request_cls, response_cls, batcher=batcher
+                    model,
+                    request_cls,
+                    response_cls,
+                    batcher=batcher,
+                    method=path,
+                    app_state=self._app_state,
                 )
                 cardinality = Cardinality.UNARY_UNARY
 
@@ -83,9 +96,10 @@ def build_servicer(
     registry: ModelRegistry,
     *,
     batchers: dict[str, Any] | None = None,
+    app_state: Any | None = None,
 ) -> InferenceServicer:
     """Convenience factory that returns a ready-to-use servicer."""
-    return InferenceServicer(registry, batchers=batchers)
+    return InferenceServicer(registry, batchers=batchers, app_state=app_state)
 
 
 # ---------------------------------------------------------------------------
@@ -99,16 +113,25 @@ def _make_unary_handler(
     response_cls: type,
     *,
     batcher: Any | None = None,
+    method: str = "",
+    app_state: Any | None = None,
 ) -> Callable[..., Any]:
     """Return an ``async def handler(stream)`` for a unary RPC."""
+    _has_deps = bool(model.dep_params or model.context_params)
 
     async def _handler(stream: Stream[Any, Any]) -> None:
         request_bytes = await stream.recv_message()
         kwargs = _decode_request(request_bytes, model, request_cls)
 
+        if _has_deps:
+            dep_kwargs = await _resolve_deps(model, stream, method, app_state)
+            kwargs = {**kwargs, **dep_kwargs}
+
         try:
             if batcher is not None:
-                raw_result = await batcher.submit(kwargs)
+                # Batcher receives only request-field kwargs (no deps).
+                request_only = {k: v for k, v in kwargs.items() if k in model.input_types}
+                raw_result = await batcher.submit(request_only)
             elif asyncio.iscoroutinefunction(model.func):
                 raw_result = await model.func(**kwargs)
             else:
@@ -126,12 +149,20 @@ def _make_streaming_handler(
     model: ModelInfo,
     request_cls: type,
     response_cls: type,
+    *,
+    method: str = "",
+    app_state: Any | None = None,
 ) -> Callable[..., Any]:
     """Return an ``async def handler(stream)`` for a server-streaming RPC."""
+    _has_deps = bool(model.dep_params or model.context_params)
 
     async def _handler(stream: Stream[Any, Any]) -> None:
         request_bytes = await stream.recv_message()
         kwargs = _decode_request(request_bytes, model, request_cls)
+
+        if _has_deps:
+            dep_kwargs = await _resolve_deps(model, stream, method, app_state)
+            kwargs = {**kwargs, **dep_kwargs}
 
         try:
             if inspect.isasyncgenfunction(model.func):
@@ -148,6 +179,29 @@ def _make_streaming_handler(
             raise InferenceError(str(exc), model_name=model.name) from exc
 
     return _handler
+
+
+async def _resolve_deps(
+    model: ModelInfo,
+    stream: Stream[Any, Any],
+    method: str,
+    app_state: Any | None,
+) -> dict[str, Any]:
+    """Resolve all ``Depends()`` and ``Context`` injections for a model call."""
+    from blazerpc.context import AppState, Context
+
+    _state = app_state if app_state is not None else AppState()
+    ctx = Context(stream=stream, method=method, app_state=_state)
+
+    resolved: dict[str, Any] = {}
+    for name in model.context_params:
+        resolved[name] = ctx
+    for name, dep in model.dep_params.items():
+        if asyncio.iscoroutinefunction(dep.fn):
+            resolved[name] = await dep.fn(ctx)
+        else:
+            resolved[name] = dep.fn(ctx)
+    return resolved
 
 
 # ---------------------------------------------------------------------------

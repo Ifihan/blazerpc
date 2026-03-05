@@ -54,6 +54,15 @@ Start the gRPC server and block until a shutdown signal is received. Registers t
 | `host`    | `str` | `"0.0.0.0"`  | Bind address.     |
 | `port`    | `int` | `50051`       | Listen port.      |
 
+### `app.state`
+
+An `AppState` instance for attaching shared resources (loaded models, database pools, config). Accessible from dependency functions via `ctx.app_state`.
+
+```python
+app.state.classifier = load_my_model()
+app.state.db_pool = create_pool()
+```
+
 ### `app.registry`
 
 The underlying `ModelRegistry` instance. Useful for introspection:
@@ -62,6 +71,48 @@ The underlying `ModelRegistry` instance. Useful for introspection:
 for model in app.registry.list_models():
     print(f"{model.name} v{model.version}")
 ```
+
+---
+
+## `blazerpc.Context`
+
+Per-request context object injected into handler parameters. Add a `Context`-typed parameter to receive it automatically.
+
+```python
+from blazerpc import Context
+
+@app.model("info")
+def info(text: str, ctx: Context) -> str:
+    return f"method={ctx.method}, peer={ctx.peer}"
+```
+
+| Attribute   | Type               | Description                                                                 |
+| ----------- | ------------------ | --------------------------------------------------------------------------- |
+| `metadata`  | `MultiDict \| None` | gRPC invocation metadata (headers) sent by the client.                    |
+| `peer`      | `Any`              | Connection peer info (address, certificate).                                |
+| `method`    | `str`              | Full gRPC method path, e.g. `"/blazerpc.InferenceService/PredictIris"`.    |
+| `app_state` | `AppState`         | Reference to `app.state`.                                                   |
+
+---
+
+## `blazerpc.Depends`
+
+Mark a handler parameter as an injected dependency. The dependency function receives the per-request `Context` and returns the value to inject. Both sync and async functions are supported.
+
+```python
+from blazerpc import Context, Depends
+
+def get_classifier(ctx: Context):
+    return ctx.app_state.classifier
+
+@app.model("predict")
+def predict(text: str, clf = Depends(get_classifier)) -> str:
+    return clf.predict([text])
+```
+
+| Constructor parameter | Type       | Description                |
+| --------------------- | ---------- | -------------------------- |
+| `fn`                  | `Callable` | Dependency function that receives `Context`. |
 
 ---
 
@@ -322,14 +373,14 @@ from blazerpc.codegen.proto import ProtoGenerator
 proto_content = ProtoGenerator().generate(app.registry)
 ```
 
-### `blazerpc.codegen.servicer.build_servicer(registry, batchers=None)`
+### `blazerpc.codegen.servicer.build_servicer(registry, batchers=None, app_state=None)`
 
 Builds a grpclib-compatible `InferenceServicer` from a `ModelRegistry`.
 
 ```python
 from blazerpc.codegen.servicer import build_servicer
 
-servicer = build_servicer(app.registry, batchers={"my_model": batcher})
+servicer = build_servicer(app.registry, batchers={"my_model": batcher}, app_state=app.state)
 ```
 
 ---
