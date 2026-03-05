@@ -38,9 +38,18 @@ This means:
 
 ## Example
 
+This example serves a scikit-learn Iris classifier with batching enabled. When multiple clients send classification requests within a short time window, BlazeRPC automatically groups them into a single batch:
+
 ```python
 import numpy as np
-from blazerpc import BlazeApp
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+
+from blazerpc import BlazeApp, TensorInput, TensorOutput
+
+iris = load_iris()
+clf = LogisticRegression(max_iter=200)
+clf.fit(iris.data, iris.target)
 
 app = BlazeApp(
     enable_batching=True,
@@ -48,13 +57,15 @@ app = BlazeApp(
     batch_timeout_ms=5.0,
 )
 
-@app.model("classify")
-def classify_image(image: list[float]) -> float:
-    # In production, this would be a batch-aware model call.
-    return float(np.mean(image))
+@app.model("iris")
+def predict_iris(
+    features: TensorInput[np.float32, "batch", 4],
+) -> TensorOutput[np.float32, "batch", 3]:
+    probs = clf.predict_proba(features).astype(np.float32)
+    return probs
 ```
 
-When three clients call `classify_image` within 5 ms of each other, the batcher groups all three requests into a single batch. The model function runs once, and each client receives only its own result.
+When three clients call `predict_iris` within 5 ms of each other, the batcher groups all three requests into a single batch. The model function runs once, and each client receives only its own result.
 
 ## Tuning
 

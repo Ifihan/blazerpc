@@ -15,7 +15,7 @@ from blazerpc.server.middleware import (
 )
 
 app = BlazeApp(
-    name="my-service",
+    name="iris-service",
     middleware=[
         LoggingMiddleware(),
         MetricsMiddleware(),        # Prometheus pull
@@ -89,6 +89,7 @@ By default, `OTelMetricsMiddleware` uses the global meter provider. To push metr
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from blazerpc.server.middleware import OTelMetricsMiddleware
 
 reader = PeriodicExportingMetricReader(
     OTLPMetricExporter(endpoint="http://otel-collector:4317")
@@ -102,7 +103,7 @@ app = BlazeApp(middleware=[OTelMetricsMiddleware(meter=meter)])
 Install the OTel dependencies:
 
 ```bash
-pip install blazerpc[otel]
+uv add "blazerpc[otel]"
 ```
 
 ### ExceptionMiddleware

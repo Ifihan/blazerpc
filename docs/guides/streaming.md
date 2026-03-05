@@ -22,6 +22,18 @@ async def generate_tokens(prompt: str) -> str:
 
 Each `yield` sends one message to the client over the open gRPC stream. The client receives tokens as they are produced, without waiting for the full response.
 
+## Consuming a stream with BlazeClient
+
+Use `client.stream()` to iterate over server-sent messages:
+
+```python
+from blazerpc import BlazeClient
+
+async with BlazeClient("127.0.0.1", 50051, registry=app.registry) as client:
+    async for token in client.stream("generate", prompt="Tell me about gRPC"):
+        print(token, end="", flush=True)
+```
+
 ## How it works
 
 When BlazeRPC sees `streaming=True` on a model, it:

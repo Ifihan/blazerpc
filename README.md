@@ -10,42 +10,55 @@ Serving ML models over gRPC typically involves writing `.proto` files by hand, c
 
 - **Decorator-based API** -- Register models with `@app.model("name")`, just like route handlers in a web framework.
 - **Automatic proto generation** -- BlazeRPC inspects your function's type annotations and produces a valid `.proto` file. No hand-written schemas.
+- **Standard Protobuf wire format** -- Uses real binary Protobuf encoding, so any gRPC client (Postman, grpcurl, generated stubs) works out of the box.
 - **Adaptive batching** -- Individual requests are automatically grouped into batches for GPU-efficient inference. Configurable batch size and timeout.
 - **Server-side streaming** -- Return tokens one at a time with `streaming=True`, ideal for LLM inference and real-time pipelines.
 - **Health checks and reflection** -- Built-in gRPC health checking protocol and server reflection, compatible with `grpcurl`, `grpcui`, and Kubernetes probes.
 - **Framework integrations** -- Optional helpers for PyTorch, TensorFlow, and ONNX Runtime that handle tensor conversion automatically.
-- **Prometheus metrics** -- Request counts, latencies, and batch sizes are exported out of the box.
+- **Observability** -- Built-in Prometheus metrics and OpenTelemetry support via the `middleware` parameter.
 
 ## Installation
 
 ```bash
-pip install blazerpc
+uv add blazerpc
 ```
 
 With framework-specific extras:
 
 ```bash
-pip install blazerpc[pytorch]      # PyTorch tensor conversion helpers
-pip install blazerpc[tensorflow]   # TensorFlow tensor conversion helpers
-pip install blazerpc[onnx]         # ONNX Runtime model wrapper
-pip install blazerpc[all]          # All optional integrations
+uv add "blazerpc[pytorch]"      # PyTorch tensor conversion helpers
+uv add "blazerpc[tensorflow]"   # TensorFlow tensor conversion helpers
+uv add "blazerpc[onnx]"         # ONNX Runtime model wrapper
+uv add "blazerpc[all]"          # All optional integrations
 ```
 
 ## Quick start
 
-### 1. Define your models
+### 1. Define your model
 
-Create a file called `app.py`:
+This example trains a scikit-learn classifier on the Iris dataset and serves it over gRPC. Create a file called `app.py`:
 
 ```python
-from blazerpc import BlazeApp
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+
+from blazerpc import BlazeApp, TensorInput, TensorOutput
+
+# Train a model (in production, load from disk)
+iris = load_iris()
+clf = LogisticRegression(max_iter=200)
+clf.fit(iris.data, iris.target)
 
 app = BlazeApp()
 
-@app.model("sentiment")
-def predict_sentiment(text: list[str]) -> list[float]:
-    # Replace with your real model inference
-    return [0.95] * len(text)
+@app.model("iris")
+def predict_iris(
+    features: TensorInput[np.float32, "batch", 4],
+) -> TensorOutput[np.float32, "batch", 3]:
+    """Classify iris flowers. Returns class probabilities."""
+    probs = clf.predict_proba(features).astype(np.float32)
+    return probs
 ```
 
 BlazeRPC reads the type annotations on your function to generate the gRPC request and response messages. Supported types include `str`, `int`, `float`, `bool`, `list[float]`, `list[str]`, and tensor types via `TensorInput` / `TensorOutput`.
@@ -58,7 +71,7 @@ blaze serve app:app
 
 ```
 ⚡ BlazeRPC server starting...
-  ✓ Loaded model: sentiment v1
+  ✓ Loaded model: iris v1
   ✓ Server listening on 0.0.0.0:50051
 ```
 
@@ -70,36 +83,32 @@ The server registers three services automatically:
 | `grpc.health.v1.Health`                    | Standard health checks |
 | `grpc.reflection.v1alpha.ServerReflection` | Service discovery      |
 
-### 3. Export the `.proto` file
+### 3. Call the model
+
+```python
+import asyncio
+import numpy as np
+from blazerpc import BlazeClient
+from app import app
+
+async def main():
+    async with BlazeClient("127.0.0.1", 50051, registry=app.registry) as client:
+        samples = np.array([[5.1, 3.5, 1.4, 0.2]], dtype=np.float32)
+        probs = await client.predict("iris", features=samples)
+        print(probs)  # [[0.97, 0.02, 0.01]]
+
+asyncio.run(main())
+```
+
+`BlazeClient` requires a `registry` parameter to build Protobuf message types for each model.
+
+### 4. Export the `.proto` file
 
 ```bash
 blaze proto app:app --output-dir ./proto_out
 ```
 
-This writes a `blaze_service.proto` file that you can compile with `protoc` or share with clients in any language. The generated proto looks like this:
-
-```protobuf
-syntax = "proto3";
-package blazerpc;
-
-message TensorProto {
-  repeated int64 shape = 1;
-  string dtype = 2;
-  bytes data = 3;
-}
-
-message SentimentRequest {
-  repeated string text = 1;
-}
-
-message SentimentResponse {
-  repeated float result = 1;
-}
-
-service InferenceService {
-  rpc PredictSentiment(SentimentRequest) returns (SentimentResponse);
-}
-```
+This writes a `blaze_service.proto` file that you can compile with `protoc` or share with clients in any language.
 
 ## Streaming
 
@@ -193,23 +202,29 @@ def classify(image: np.ndarray) -> np.ndarray:
 
 ## Middleware
 
-BlazeRPC provides a middleware system built on grpclib's event hooks. Attach middleware to the underlying server to add logging, metrics, or custom request processing.
+BlazeRPC provides a middleware system built on grpclib's event hooks. Pass middleware instances directly to `BlazeApp`:
 
 ```python
-from blazerpc.server.middleware import LoggingMiddleware, MetricsMiddleware
+from blazerpc import BlazeApp
+from blazerpc.server.middleware import LoggingMiddleware, MetricsMiddleware, OTelMetricsMiddleware
 
-# These are attached inside app.serve() or manually on the grpclib Server:
-# LoggingMiddleware().attach(grpclib_server)
-# MetricsMiddleware().attach(grpclib_server)
+app = BlazeApp(
+    middleware=[
+        LoggingMiddleware(),
+        MetricsMiddleware(),          # Prometheus
+        OTelMetricsMiddleware(),      # OpenTelemetry
+    ],
+)
 ```
 
 **Built-in middleware:**
 
-| Middleware            | Description                                                                                    |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `LoggingMiddleware`   | Logs every RPC call with method name, peer address, and response status.                       |
-| `MetricsMiddleware`   | Exports Prometheus metrics: `blazerpc_requests_total` and `blazerpc_request_duration_seconds`. |
-| `ExceptionMiddleware` | Base class for custom exception-to-gRPC-status mapping.                                        |
+| Middleware              | Description                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `LoggingMiddleware`     | Logs every RPC call with method name, peer address, and response status.                       |
+| `MetricsMiddleware`     | Exports Prometheus metrics: `blazerpc_requests_total` and `blazerpc_request_duration_seconds`. |
+| `OTelMetricsMiddleware` | Pushes metrics via the OpenTelemetry Metrics API. Install with `uv add "blazerpc[otel]"`.     |
+| `ExceptionMiddleware`   | Base class for custom exception-to-gRPC-status mapping.                                        |
 
 To build your own middleware, subclass `Middleware` and implement `on_request` and `on_response`:
 
@@ -262,25 +277,26 @@ src/blazerpc/
   __init__.py          # Public API: BlazeApp, TensorInput, TensorOutput, exceptions
   app.py               # BlazeApp class -- model registration and server lifecycle
   types.py             # TensorInput, TensorOutput, type introspection
+  client.py            # BlazeClient for async gRPC calls (unary and server-streaming)
   exceptions.py        # Exception hierarchy (BlazeRPCError and subclasses)
-  decorators.py        # Reserved for future decorator extensions
   cli/
     main.py            # Typer CLI (blaze serve, blaze proto)
     serve.py           # App loading from import strings
     proto.py           # Proto file export
   codegen/
     proto.py           # .proto file generation from type annotations
-    servicer.py        # Dynamic grpclib servicer generation
+    proto_types.py     # Dynamic betterproto message class construction
+    servicer.py        # Dynamic grpclib servicer generation with Protobuf encoding
   runtime/
     registry.py        # Model registry (stores registered models and metadata)
     executor.py        # Model execution with sync/async bridging
     batcher.py         # Adaptive request batching
     serialization.py   # Tensor and scalar serialization
   server/
-    grpc.py            # GRPCServer wrapper with signal handling and graceful shutdown
+    grpc.py            # GRPCServer wrapper with RawCodec, signal handling, graceful shutdown
     health.py          # gRPC health checking protocol
     reflection.py      # gRPC server reflection
-    middleware.py       # Logging, metrics, and extensible middleware base
+    middleware.py       # Logging, metrics, OTel, and extensible middleware base
   contrib/
     pytorch.py         # PyTorch <-> NumPy conversion and @torch_model decorator
     tensorflow.py      # TensorFlow <-> NumPy conversion and @tf_model decorator

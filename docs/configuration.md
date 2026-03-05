@@ -94,9 +94,9 @@ blaze serve app:app --reload
 Install the reload dependency:
 
 ```bash
-pip install blazerpc[reload]
+uv add "blazerpc[reload]"
 # or
-pip install watchfiles
+uv add watchfiles
 ```
 
 The reload feature is intended for **development only** — do not use it in production.
@@ -154,7 +154,7 @@ When `OTelMetricsMiddleware` is attached, the following instruments are exported
 Install the optional OTel dependencies:
 
 ```bash
-pip install blazerpc[otel]
+uv add "blazerpc[otel]"
 ```
 
 By default the global meter provider is used. To push to a specific backend, pass a custom `Meter`:
