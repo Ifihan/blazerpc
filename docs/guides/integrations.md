@@ -7,7 +7,7 @@ BlazeRPC provides optional helpers for PyTorch, TensorFlow, and ONNX Runtime. Th
 Install the extra:
 
 ```bash
-pip install blazerpc[pytorch]
+uv add "blazerpc[pytorch]"
 ```
 
 ### `@torch_model` decorator
@@ -15,14 +15,17 @@ pip install blazerpc[pytorch]
 The `@torch_model` decorator converts NumPy inputs to PyTorch tensors before your function runs, and converts the PyTorch tensor output back to NumPy when it returns:
 
 ```python
-from blazerpc import BlazeApp
+import numpy as np
+from blazerpc import BlazeApp, TensorInput, TensorOutput
 from blazerpc.contrib.pytorch import torch_model
 
 app = BlazeApp()
 
 @app.model("classifier")
 @torch_model(device="cuda")
-def classify(image):
+def classify(
+    image: TensorInput[np.float32, "batch", 3, 224, 224],
+) -> TensorOutput[np.float32, "batch", 1000]:
     # `image` is a torch.Tensor on CUDA
     return model(image)
     # Return value is converted back to np.ndarray automatically
@@ -59,7 +62,7 @@ array = torch_to_numpy(tensor)
 Install the extra:
 
 ```bash
-pip install blazerpc[tensorflow]
+uv add "blazerpc[tensorflow]"
 ```
 
 ### `@tf_model` decorator
@@ -67,11 +70,17 @@ pip install blazerpc[tensorflow]
 Works the same way as `@torch_model`, converting NumPy inputs to TensorFlow tensors and back:
 
 ```python
+import numpy as np
+from blazerpc import BlazeApp, TensorInput, TensorOutput
 from blazerpc.contrib.tensorflow import tf_model
+
+app = BlazeApp()
 
 @app.model("classifier")
 @tf_model
-def classify(image):
+def classify(
+    image: TensorInput[np.float32, "batch", 224, 224, 3],
+) -> TensorOutput[np.float32, "batch", 1000]:
     # `image` is a tf.Tensor
     return model(image)
 ```
@@ -94,7 +103,7 @@ array = tf_to_numpy(tensor)
 Install the extra:
 
 ```bash
-pip install blazerpc[onnx]
+uv add "blazerpc[onnx]"
 ```
 
 ### `ONNXModel` wrapper
@@ -102,6 +111,8 @@ pip install blazerpc[onnx]
 `ONNXModel` manages an ONNX Runtime inference session and exposes a simple `predict()` method:
 
 ```python
+import numpy as np
+from blazerpc import BlazeApp, TensorInput, TensorOutput
 from blazerpc.contrib.onnx import ONNXModel
 
 onnx_model = ONNXModel(
@@ -109,8 +120,12 @@ onnx_model = ONNXModel(
     providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
 )
 
+app = BlazeApp()
+
 @app.model("classifier")
-def classify(image: np.ndarray) -> np.ndarray:
+def classify(
+    image: TensorInput[np.float32, "batch", 3, 224, 224],
+) -> TensorOutput[np.float32, "batch", 1000]:
     return onnx_model.predict(image)[0]
 ```
 
@@ -153,5 +168,5 @@ print(onnx_model.output_names)  # ["logits"]
 To install all framework integrations at once:
 
 ```bash
-pip install blazerpc[all]
+uv add "blazerpc[all]"
 ```

@@ -1,8 +1,13 @@
 """
-Simple sentiment analysis service.
+Iris classifier service.
 
-This example demonstrates the most basic BlazeRPC usage: registering a
-single model function and serving it over gRPC.
+This example trains a scikit-learn Logistic Regression model on the Iris
+dataset and serves it over gRPC using BlazeRPC. The model accepts four
+float features (sepal length, sepal width, petal length, petal width) and
+returns class probabilities for the three Iris species.
+
+Prerequisites:
+    pip install scikit-learn
 
 Run the server:
     uv run blaze serve examples.simple.app:app
@@ -11,20 +16,36 @@ Export the .proto file:
     uv run blaze proto examples.simple.app:app --output-dir ./proto_out
 """
 
-from blazerpc import BlazeApp
+from __future__ import annotations
 
-app = BlazeApp(name="simple-demo", enable_batching=False)
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+
+from blazerpc import BlazeApp, TensorInput, TensorOutput
+
+# Train a simple model (in production, load a pre-trained model from disk)
+iris = load_iris()
+clf = LogisticRegression(max_iter=200)
+clf.fit(iris.data, iris.target)
+
+app = BlazeApp(name="iris-demo", enable_batching=False)
 
 
-@app.model("sentiment")
-def predict_sentiment(text: list[str]) -> list[float]:
-    """Return a sentiment score between 0 (negative) and 1 (positive).
+@app.model("iris")
+def predict_iris(
+    features: TensorInput[np.float32, "batch", 4],
+) -> TensorOutput[np.float32, "batch", 3]:
+    """Classify iris flowers. Returns class probabilities.
 
-    This is a stub implementation. In production you would load a real
-    model (e.g. a fine-tuned transformer) and run inference here.
+    Input: a batch of samples, each with 4 features
+        [sepal_length, sepal_width, petal_length, petal_width]
+
+    Output: a batch of probability vectors over 3 classes
+        [setosa, versicolor, virginica]
     """
-    # Stub: return 0.85 for every input
-    return [0.85] * len(text)
+    probs = clf.predict_proba(features).astype(np.float32)
+    return probs
 
 
 @app.model("echo")

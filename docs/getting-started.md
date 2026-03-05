@@ -1,38 +1,54 @@
 # Getting started
 
-This guide walks you through installing BlazeRPC, defining a model, starting the server, and exporting a `.proto` file.
+This guide walks you through installing BlazeRPC, training a simple model, serving it over gRPC, and calling it from a Python client.
 
 ## Installation
 
 ```bash
-pip install blazerpc
+uv add blazerpc
 ```
 
 If you use a specific ML framework, install the corresponding extra:
 
 ```bash
-pip install blazerpc[pytorch]      # PyTorch tensor conversion helpers
-pip install blazerpc[tensorflow]   # TensorFlow tensor conversion helpers
-pip install blazerpc[onnx]         # ONNX Runtime model wrapper
-pip install blazerpc[all]          # All optional integrations
+uv add "blazerpc[pytorch]"      # PyTorch tensor conversion helpers
+uv add "blazerpc[tensorflow]"   # TensorFlow tensor conversion helpers
+uv add "blazerpc[onnx]"         # ONNX Runtime model wrapper
+uv add "blazerpc[all]"          # All optional integrations
 ```
 
 ## Define a model
 
+This example trains a scikit-learn Logistic Regression classifier on the [Iris dataset](https://scikit-learn.org/stable/datasets/toy_dataset.html#iris-dataset) and serves it over gRPC. The Iris dataset ships with scikit-learn, so there are no downloads or GPUs required.
+
 Create a file called `app.py`:
 
 ```python
-from blazerpc import BlazeApp
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+
+from blazerpc import BlazeApp, TensorInput, TensorOutput
+
+# Train a simple model (in production, load a pre-trained model from disk)
+iris = load_iris()
+clf = LogisticRegression(max_iter=200)
+clf.fit(iris.data, iris.target)
 
 app = BlazeApp()
 
-@app.model("sentiment")
-def predict_sentiment(text: list[str]) -> list[float]:
-    # Replace with your real model inference
-    return [0.95] * len(text)
+@app.model("iris")
+def predict_iris(
+    features: TensorInput[np.float32, "batch", 4],
+) -> TensorOutput[np.float32, "batch", 3]:
+    """Classify iris flowers. Returns class probabilities."""
+    probs = clf.predict_proba(features).astype(np.float32)
+    return probs
 ```
 
-BlazeRPC reads the type annotations on your function to generate the gRPC request and response messages. Supported types include `str`, `int`, `float`, `bool`, `list[float]`, `list[str]`, and tensor types via `TensorInput` / `TensorOutput`.
+BlazeRPC reads the type annotations on your function to generate the gRPC request and response messages. `TensorInput` and `TensorOutput` declare the expected dtype and shape, and BlazeRPC serializes them as `TensorProto` messages on the wire.
+
+Supported types include `str`, `int`, `float`, `bool`, `list[float]`, `list[str]`, and tensor types via `TensorInput` / `TensorOutput`.
 
 ## Start the server
 
@@ -44,7 +60,7 @@ The import string follows the `module:attribute` convention. BlazeRPC imports th
 
 ```
 ⚡ BlazeRPC server starting...
-  ✓ Loaded model: sentiment v1
+  ✓ Loaded model: iris v1
   ✓ Server listening on 0.0.0.0:50051
 ```
 
@@ -55,6 +71,36 @@ The server registers three services automatically:
 | `blazerpc.InferenceService`                | Your model RPCs        |
 | `grpc.health.v1.Health`                    | Standard health checks |
 | `grpc.reflection.v1alpha.ServerReflection` | Service discovery      |
+
+## Call the model from Python
+
+Create a file called `client.py`:
+
+```python
+import asyncio
+import numpy as np
+from blazerpc import BlazeClient
+from app import app
+
+IRIS_CLASSES = ["setosa", "versicolor", "virginica"]
+
+async def main():
+    async with BlazeClient("127.0.0.1", 50051, registry=app.registry) as client:
+        samples = np.array(
+            [[5.1, 3.5, 1.4, 0.2],   # typical setosa
+             [6.7, 3.0, 5.2, 2.3]],  # typical virginica
+            dtype=np.float32,
+        )
+        probs = await client.predict("iris", features=samples)
+
+        for i, sample in enumerate(samples):
+            predicted = IRIS_CLASSES[np.argmax(probs[i])]
+            print(f"sample {i+1} → {predicted} (probs={probs[i]})")
+
+asyncio.run(main())
+```
+
+`BlazeClient` requires a `registry` parameter so it can build the correct Protobuf message types for each model. Pass `app.registry` from your server application.
 
 ## Export the `.proto` file
 
@@ -74,35 +120,46 @@ message TensorProto {
   bytes data = 3;
 }
 
-message SentimentRequest {
-  repeated string text = 1;
+message IrisRequest {
+  TensorProto features = 1;
 }
 
-message SentimentResponse {
-  repeated float result = 1;
+message IrisResponse {
+  TensorProto result = 1;
 }
 
 service InferenceService {
-  rpc PredictSentiment(SentimentRequest) returns (SentimentResponse);
+  rpc PredictIris(IrisRequest) returns (IrisResponse);
 }
 ```
+
+Because BlazeRPC uses standard Protobuf encoding on the wire, this proto file works with any gRPC client -- Postman, grpcurl, or generated stubs in Go, Java, Rust, etc.
 
 ## Multiple models
 
 Register as many models as you need on the same app. Each model becomes its own RPC method:
 
 ```python
-@app.model("sentiment")
-def predict_sentiment(text: list[str]) -> list[float]:
-    return [0.92] * len(text)
+from sklearn.linear_model import LinearRegression, LogisticRegression
 
-@app.model("ner")
-def predict_ner(text: str) -> list[str]:
-    return ["BlazeRPC", "gRPC", "Python"]
+# Iris classifier
+@app.model("iris")
+def predict_iris(
+    features: TensorInput[np.float32, "batch", 4],
+) -> TensorOutput[np.float32, "batch", 3]:
+    return iris_clf.predict_proba(features).astype(np.float32)
 
-@app.model("summarize")
-def summarize(text: str, max_length: int) -> str:
-    return text[:max_length]
+# Linear regression
+@app.model("housing")
+def predict_housing(
+    features: TensorInput[np.float32, "batch", 3],
+) -> TensorOutput[np.float32, "batch", 1]:
+    return reg.predict(features).astype(np.float32).reshape(-1, 1)
+
+# Simple echo for health checks
+@app.model("echo")
+def echo(text: str) -> str:
+    return f"You said: {text}"
 ```
 
 All three models are served under the same `InferenceService` and discovered through a single reflection endpoint.
