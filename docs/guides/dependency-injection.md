@@ -1,4 +1,4 @@
-# Dependency injection
+# Dependency Injection
 
 BlazeRPC provides a FastAPI-style dependency injection system that lets your model handlers access gRPC metadata, shared application state, and reusable dependencies — without coupling to the transport layer.
 
@@ -6,11 +6,35 @@ BlazeRPC provides a FastAPI-style dependency injection system that lets your mod
 
 Three building blocks:
 
-| API | Purpose |
-| --- | ------- |
-| `app.state` | Attach shared resources (models, DB pools, config) at startup. |
-| `Context` | Per-request object with gRPC metadata, peer info, method path, and `app_state`. |
-| `Depends(fn)` | Mark a parameter as an injected dependency resolved at request time. |
+| API           | Purpose                                                                         |
+| ------------- | ------------------------------------------------------------------------------- |
+| `app.state`   | Attach shared resources (models, DB pools, config) at startup.                  |
+| `Context`     | Per-request object with gRPC metadata, peer info, method path, and `app_state`. |
+| `Depends(fn)` | Mark a parameter as an injected dependency resolved at request time.            |
+
+## Parameter ordering
+
+We recommend placing parameters in this order:
+
+1. **`Context`** — framework-injected request context
+2. **Request fields** — the Protobuf inputs sent by clients
+3. **`Depends(...)`** — injected dependencies (must come last because they have default values)
+
+This makes it clear at a glance which parameters are injected by BlazeRPC and which come from the client over the wire.
+
+```python
+@app.model("example")
+def example(
+    ctx: Context,                        # 1. Context (injected)
+    text: str,                           # 2. Request field (from client)
+    count: int,                          # 2. Request field (from client)
+    model = Depends(get_model),          # 3. Dependency (injected)
+    names: list[str] = Depends(get_names),  # 3. Dependency (injected)
+) -> str:
+    ...
+```
+
+> **Note:** `Context` and `Depends` parameters are **not** included in the generated Protobuf message. Only request fields become wire-level fields. Clients never see injected parameters.
 
 ## `app.state` — shared application state
 
@@ -36,18 +60,18 @@ from blazerpc import BlazeApp, Context
 app = BlazeApp()
 
 @app.model("info")
-def info(text: str, ctx: Context) -> str:
+def info(ctx: Context, text: str) -> str:
     return f"method={ctx.method}, peer={ctx.peer}"
 ```
 
 ### Context attributes
 
-| Attribute | Type | Description |
-| --------- | ---- | ----------- |
-| `metadata` | `MultiDict \| None` | gRPC invocation metadata (headers) sent by the client. |
-| `peer` | `Any` | Connection peer info (address, certificate). |
-| `method` | `str` | Full gRPC method path, e.g. `"/blazerpc.InferenceService/PredictIris"`. |
-| `app_state` | `AppState` | Reference to `app.state`. |
+| Attribute   | Type                | Description                                                             |
+| ----------- | ------------------- | ----------------------------------------------------------------------- |
+| `metadata`  | `MultiDict \| None` | gRPC invocation metadata (headers) sent by the client.                  |
+| `peer`      | `Any`               | Connection peer info (address, certificate).                            |
+| `method`    | `str`               | Full gRPC method path, e.g. `"/blazerpc.InferenceService/PredictIris"`. |
+| `app_state` | `AppState`          | Reference to `app.state`.                                               |
 
 `Context` parameters are **not** included in the Protobuf request message — they are injected by the framework at request time.
 
@@ -103,8 +127,8 @@ def get_class_names(ctx: Context):
 
 @app.model("label")
 def label(
-    features: list[float],
     ctx: Context,
+    features: list[float],
     model = Depends(get_model),
     names: list[str] = Depends(get_class_names),
 ) -> str:
@@ -141,7 +165,7 @@ def secure_predict(
 
 ## Limitations
 
-- **Batched handlers**: When batching is enabled, the batcher coalesces multiple requests. Dependencies are resolved per-request before batching, but only request-field kwargs are passed through the batcher. If your handler uses both `Depends` and batching, the dependency values come from the individual request context, not the batch.
+- **Batching is disabled for DI models**: Models that use `Context` or `Depends` are automatically excluded from the batcher. They are called individually per request, even when `enable_batching=True`. A log warning is emitted at startup for each excluded model. See [Adaptive batching — Automatic exclusions](batching.md#automatic-exclusions) for details.
 - **No nested dependencies**: `Depends` functions receive `Context` only — they cannot declare their own `Depends` parameters. Keep dependency functions simple.
 
 ## Full example

@@ -39,6 +39,7 @@ nav:
   - Guides:
       - Streaming: guides/streaming.md
       - Adaptive batching: guides/batching.md
+      - Dependency Injection: guides/dependency-injection.md
       - Middleware: guides/middleware.md
       - Framework integrations: guides/integrations.md
   - Configuration: configuration.md

@@ -252,7 +252,8 @@ async def test_unary_tensor_over_wire() -> None:
             resp_cls,
         )
         result_arr = np.frombuffer(
-            response.result.data, dtype=np.float32  # type: ignore[union-attr]
+            response.result.data,
+            dtype=np.float32,  # type: ignore[union-attr]
         )
         np.testing.assert_array_equal(result_arr, [2.0, 4.0, 6.0, 8.0])
     finally:
@@ -346,8 +347,8 @@ async def test_context_injection_over_wire() -> None:
 
     @app.model("ctx_echo")
     def ctx_echo(
-        text: str,
         ctx: Context,
+        text: str,
         prefix: str = Depends(get_prefix),
     ) -> str:
         return f"{prefix}:{ctx.method}:{text}"

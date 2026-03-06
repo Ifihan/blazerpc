@@ -76,13 +76,15 @@ for model in app.registry.list_models():
 
 ## `blazerpc.Context`
 
-Per-request context object injected into handler parameters. Add a `Context`-typed parameter to receive it automatically.
+Per-request context object injected into handler parameters. Add a `Context`-typed parameter to receive it automatically. `Context` parameters are **not** included in the Protobuf request message — clients never send them.
+
+**Convention:** Place `Context` before request fields. See [Parameter ordering](guides/dependency-injection.md#parameter-ordering) for the full convention.
 
 ```python
 from blazerpc import Context
 
 @app.model("info")
-def info(text: str, ctx: Context) -> str:
+def info(ctx: Context, text: str) -> str:
     return f"method={ctx.method}, peer={ctx.peer}"
 ```
 
@@ -97,7 +99,9 @@ def info(text: str, ctx: Context) -> str:
 
 ## `blazerpc.Depends`
 
-Mark a handler parameter as an injected dependency. The dependency function receives the per-request `Context` and returns the value to inject. Both sync and async functions are supported.
+Mark a handler parameter as an injected dependency. Use `Depends(fn)` as the parameter's default value. The dependency function receives the per-request `Context` and returns the value to inject. Both sync and async functions are supported. `Depends` parameters are **not** included in the Protobuf message — clients never send them.
+
+**Convention:** Place `Depends` parameters after request fields. See [Parameter ordering](guides/dependency-injection.md#parameter-ordering) for the full convention.
 
 ```python
 from blazerpc import Context, Depends
@@ -337,7 +341,7 @@ Base class for custom exception-to-gRPC-status mapping. A no-op by default.
 
 ### `blazerpc.runtime.batcher.Batcher`
 
-Adaptive request batcher. Collects individual requests into batches.
+Adaptive request batcher. Collects individual requests into batches. Automatically managed by `BlazeApp.serve()` — batchers are created for each non-streaming, non-DI model and stopped on shutdown. Batchers are **not** created for streaming models or models that use `Context`/`Depends` (see [Automatic exclusions](guides/batching.md#automatic-exclusions)).
 
 | Constructor parameter | Type    | Default | Description                         |
 | --------------------- | ------- | ------- | ----------------------------------- |

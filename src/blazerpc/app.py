@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Callable
+
+log = logging.getLogger("blazerpc")
 
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import AppState
@@ -71,6 +74,13 @@ class BlazeApp:
         if self.enable_batching:
             for model in self.registry.list_models():
                 if model.streaming:
+                    continue
+                if model.dep_params or model.context_params:
+                    log.warning(
+                        "Model '%s' uses Context/Depends — skipping batcher "
+                        "(batching is not compatible with dependency injection)",
+                        model.name,
+                    )
                     continue
                 batcher = Batcher(self.max_batch_size, self.batch_timeout_ms)
                 await batcher.start(_make_batch_inference_fn(model))

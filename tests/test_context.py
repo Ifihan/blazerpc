@@ -99,7 +99,7 @@ def test_extract_type_info_with_depends() -> None:
 
 
 def test_extract_type_info_with_context() -> None:
-    def handler(text: str, ctx: Context) -> str:
+    def handler(ctx: Context, text: str) -> str:
         return text
 
     info = extract_type_info(handler)
@@ -113,9 +113,9 @@ def test_extract_type_info_mixed() -> None:
         return "model"
 
     def handler(
+        ctx: Context,
         text: str,
         count: int,
-        ctx: Context,
         model: str = Depends(get_model),
     ) -> str:
         return text
@@ -148,7 +148,7 @@ def test_model_with_context_registers() -> None:
     app = BlazeApp(enable_batching=False)
 
     @app.model("test")
-    def handler(text: str, ctx: Context) -> str:
+    def handler(ctx: Context, text: str) -> str:
         return text
 
     model = app.registry.get("test")
@@ -195,7 +195,7 @@ async def test_resolve_deps_context_injection() -> None:
     app = BlazeApp(enable_batching=False)
 
     @app.model("test")
-    def handler(text: str, ctx: Context) -> str:
+    def handler(ctx: Context, text: str) -> str:
         return text
 
     model = app.registry.get("test")
@@ -256,3 +256,50 @@ def test_app_state_accepts_attributes() -> None:
     app = BlazeApp(enable_batching=False)
     app.state.model = "loaded_model"
     assert app.state.model == "loaded_model"
+
+
+# ---------------------------------------------------------------------------
+# Batching + DI interaction
+# ---------------------------------------------------------------------------
+
+
+async def test_batching_skipped_for_model_with_deps() -> None:
+    """Models using Context/Depends should not get a batcher assigned."""
+    from blazerpc.app import _make_batch_inference_fn
+    from blazerpc.runtime.batcher import Batcher
+
+    app = BlazeApp(enable_batching=True, max_batch_size=4)
+
+    def get_value(ctx: Context) -> int:
+        return 42
+
+    @app.model("plain")
+    def plain(a: float, b: float) -> float:
+        return a + b
+
+    @app.model("with_dep")
+    def with_dep(text: str, val: int = Depends(get_value)) -> str:
+        return text
+
+    @app.model("with_ctx")
+    def with_ctx(ctx: Context, text: str) -> str:
+        return text
+
+    # Simulate what app.serve() does to build batchers
+    batchers: dict[str, Batcher] = {}
+    for model in app.registry.list_models():
+        if model.streaming:
+            continue
+        if model.dep_params or model.context_params:
+            continue
+        batcher = Batcher(app.max_batch_size, app.batch_timeout_ms)
+        await batcher.start(_make_batch_inference_fn(model))
+        batchers[model.name] = batcher
+
+    # Only the plain model gets a batcher
+    assert "plain" in batchers
+    assert "with_dep" not in batchers
+    assert "with_ctx" not in batchers
+
+    for b in batchers.values():
+        await b.stop()

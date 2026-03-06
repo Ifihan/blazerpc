@@ -24,17 +24,20 @@ app = BlazeApp(
 
 ## How it works
 
+Batching is fully transparent — you write a normal single-item handler, and the framework handles collecting requests into batches and distributing results.
+
 The batcher runs as a background `asyncio.Task` with the following loop:
 
 1. **Wait** for the first request to arrive.
 2. **Collect** additional requests until either `max_batch_size` is reached or `batch_timeout_ms` elapses.
-3. **Dispatch** the batch to the model function.
-4. **Distribute** results back to each client's individual future.
+3. **Dispatch** the collected batch to the model function (called once per item in the batch).
+4. **Distribute** each result back to the corresponding client's future.
 
 This means:
 
 - Under high load, batches fill up quickly and are dispatched at full capacity.
 - Under light load, the timeout ensures that a lone request is not stuck waiting for a batch to fill. A 10 ms timeout adds negligible latency.
+- Your handler signature stays the same whether batching is on or off.
 
 ## Example
 
@@ -82,19 +85,7 @@ A good starting point:
 
 If the model function raises an exception, every request in the batch receives that exception. This is the "whole-batch failure" case.
 
-BlazeRPC also supports **per-item failure**. If the model function returns an `Exception` instance at a specific index in the results list, only that item's request is rejected. Other items in the batch still receive their results:
-
-```python
-@app.model("classify")
-def classify_batch(inputs: list[dict]) -> list:
-    results = []
-    for inp in inputs:
-        try:
-            results.append(model.predict(inp))
-        except Exception as e:
-            results.append(e)  # This item fails; others succeed.
-    return results
-```
+The batcher also supports **per-item failure** at the infrastructure level. When the internal batch inference function returns an `Exception` instance at a specific index in the results list, only that item's request is rejected — other items in the batch still receive their results normally.
 
 If the results list has a different length than the input batch, every request receives a `RuntimeError` explaining the mismatch.
 
@@ -109,5 +100,13 @@ app = BlazeApp(enable_batching=False)
 This is appropriate when:
 
 - Your model does not benefit from batched inference (e.g., it processes one item at a time internally).
-- You are using streaming endpoints (streaming is always unbatched).
 - You want the simplest possible request path for debugging.
+
+## Automatic exclusions
+
+Even when `enable_batching=True`, BlazeRPC automatically skips batching for certain models:
+
+- **Streaming models**: Server-streaming handlers (`streaming=True`) are always called individually. The batcher only handles unary RPCs.
+- **Models using dependency injection**: Handlers that use `Context` or `Depends` parameters are excluded from batching. Each request is processed individually so that per-request context and dependencies are correctly resolved. A warning is logged at startup for each excluded model.
+
+If you need both batching and shared resources, access them directly in the handler body (e.g., via a module-level variable) rather than through `Depends`. See the [dependency injection guide](dependency-injection.md#limitations) for details.
