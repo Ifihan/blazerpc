@@ -6,8 +6,6 @@ import asyncio
 import logging
 from typing import Any, Callable
 
-log = logging.getLogger("blazerpc")
-
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import AppState
 from blazerpc.runtime.batcher import Batcher
@@ -16,6 +14,8 @@ from blazerpc.server.grpc import GRPCServer
 from blazerpc.server.health import build_health_service
 from blazerpc.server.middleware import Middleware
 from blazerpc.server.reflection import build_reflection_service
+
+log = logging.getLogger("blazerpc")
 
 
 def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
