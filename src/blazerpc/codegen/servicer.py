@@ -130,7 +130,9 @@ def _make_unary_handler(
         try:
             if batcher is not None:
                 # Batcher receives only request-field kwargs (no deps).
-                request_only = {k: v for k, v in kwargs.items() if k in model.input_types}
+                request_only = {
+                    k: v for k, v in kwargs.items() if k in model.input_types
+                }
                 raw_result = await batcher.submit(request_only)
             elif asyncio.iscoroutinefunction(model.func):
                 raw_result = await model.func(**kwargs)
