@@ -63,6 +63,8 @@ app.state.classifier = load_my_model()
 app.state.db_pool = create_pool()
 ```
 
+See the [dependency injection guide](guides/dependency-injection.md#appstate-shared-application-state) for usage patterns and examples.
+
 ### `app.registry`
 
 The underlying `ModelRegistry` instance. Useful for introspection:
@@ -78,7 +80,7 @@ for model in app.registry.list_models():
 
 Per-request context object injected into handler parameters. Add a `Context`-typed parameter to receive it automatically. `Context` parameters are **not** included in the Protobuf request message — clients never send them.
 
-**Convention:** Place `Context` before request fields. See [Parameter ordering](guides/dependency-injection.md#parameter-ordering) for the full convention.
+**Convention:** Place `Context` before request fields. See [Parameter ordering](guides/dependency-injection.md#combining-multiple-dependencies) for the full convention.
 
 ```python
 from blazerpc import Context
@@ -95,13 +97,15 @@ def info(ctx: Context, text: str) -> str:
 | `method`    | `str`              | Full gRPC method path, e.g. `"/blazerpc.InferenceService/PredictIris"`.    |
 | `app_state` | `AppState`         | Reference to `app.state`.                                                   |
 
+See the [dependency injection guide](guides/dependency-injection.md#context-per-request-information) for detailed usage and examples.
+
 ---
 
 ## `blazerpc.Depends`
 
 Mark a handler parameter as an injected dependency. Use `Depends(fn)` as the parameter's default value. The dependency function receives the per-request `Context` and returns the value to inject. Both sync and async functions are supported. `Depends` parameters are **not** included in the Protobuf message — clients never send them.
 
-**Convention:** Place `Depends` parameters after request fields. See [Parameter ordering](guides/dependency-injection.md#parameter-ordering) for the full convention.
+**Convention:** Place `Depends` parameters after request fields. See [Parameter ordering](guides/dependency-injection.md#combining-multiple-dependencies) for the full convention.
 
 ```python
 from blazerpc import Context, Depends
@@ -117,6 +121,10 @@ def predict(text: str, clf = Depends(get_classifier)) -> str:
 | Constructor parameter | Type       | Description                |
 | --------------------- | ---------- | -------------------------- |
 | `fn`                  | `Callable` | Dependency function that receives `Context`. |
+
+Models using `Depends` are excluded from adaptive batching. See [Limitations](guides/dependency-injection.md#limitations-and-workarounds) for details.
+
+See the [dependency injection guide](guides/dependency-injection.md#depends-reusable-dependencies) for detailed usage, async dependencies, and real-world patterns.
 
 ---
 

@@ -4,6 +4,33 @@ All notable changes to BlazeRPC are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-12
+
+### Added
+
+- **Dependency injection system** with three building blocks:
+  - `app.state` — attach shared resources (models, DB pools, config) at startup.
+  - `Context` — per-request object providing gRPC metadata, peer info, method
+    path, and access to `app.state`.
+  - `Depends(fn)` — mark a handler parameter as an injected dependency resolved
+    at request time. Supports both sync and async dependency functions.
+- `Context` and `Depends` parameters are automatically excluded from generated
+  Protobuf messages — clients never see them on the wire.
+- Models using `Context` or `Depends` are automatically excluded from the
+  adaptive batcher at startup with a log warning, since each request requires
+  its own per-request context.
+- Dependency injection guide with progressive tutorial, runtime flow diagram,
+  auth pattern example, and decision guide for choosing between `app.state`,
+  `Context`, and `Depends`.
+
+### Changed
+
+- `build_servicer()` accepts an optional `app_state` parameter for passing
+  application state to the DI resolution layer.
+- Batching documentation updated with an "Automatic exclusions" section
+  covering streaming and DI model exclusions.
+- API reference updated with cross-links to the dependency injection guide.
+
 ## [2.0.0] - 2026-03-03
 
 ### Breaking Changes

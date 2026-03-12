@@ -109,4 +109,4 @@ Even when `enable_batching=True`, BlazeRPC automatically skips batching for cert
 - **Streaming models**: Server-streaming handlers (`streaming=True`) are always called individually. The batcher only handles unary RPCs.
 - **Models using dependency injection**: Handlers that use `Context` or `Depends` parameters are excluded from batching. Each request is processed individually so that per-request context and dependencies are correctly resolved. A warning is logged at startup for each excluded model.
 
-If you need both batching and shared resources, access them directly in the handler body (e.g., via a module-level variable) rather than through `Depends`. See the [dependency injection guide](dependency-injection.md#limitations) for details.
+If you need both batching and shared resources, access them directly in the handler body (e.g., via a module-level variable) rather than through `Depends`. See the [dependency injection guide](dependency-injection.md#limitations-and-workarounds) for details.
