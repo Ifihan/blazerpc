@@ -17,6 +17,8 @@ class ModelInfo:
     streaming: bool = False
     input_types: dict[str, Any] = field(default_factory=dict)
     output_type: Any = None
+    dep_params: dict[str, Any] = field(default_factory=dict)
+    context_params: list[str] = field(default_factory=list)
 
 
 class ModelRegistry:
@@ -31,7 +33,12 @@ class ModelRegistry:
         streaming: bool = False,
     ) -> None:
         type_info = extract_type_info(func)
-        if not type_info["inputs"]:
+        total_params = (
+            len(type_info["inputs"])
+            + len(type_info["deps"])
+            + len(type_info["context_params"])
+        )
+        if total_params == 0:
             raise ValidationError(
                 f"Model '{name}' function must have at least one parameter "
                 "with a type annotation",
@@ -46,6 +53,8 @@ class ModelRegistry:
             streaming=streaming,
             input_types=type_info["inputs"],
             output_type=type_info["output"],
+            dep_params=type_info["deps"],
+            context_params=type_info["context_params"],
         )
 
     def get(self, name: str, version: str = "1") -> ModelInfo:

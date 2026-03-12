@@ -166,6 +166,7 @@ All three models are served under the same `InferenceService` and discovered thr
 
 ## Next steps
 
+- [Dependency injection](guides/dependency-injection.md) -- Access gRPC metadata, share resources, and inject dependencies FastAPI-style.
 - [Streaming](guides/streaming.md) -- Return tokens incrementally for LLM workloads.
 - [Adaptive batching](guides/batching.md) -- Group requests into batches for GPU efficiency.
 - [Framework integrations](guides/integrations.md) -- Use PyTorch, TensorFlow, or ONNX Runtime with automatic tensor conversion.

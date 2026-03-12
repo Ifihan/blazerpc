@@ -153,6 +153,11 @@ tensorflow = [
     { name = "tensorflow" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "mkdocs-material" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "betterproto", specifier = ">=2.0.0b6" },
@@ -181,6 +186,9 @@ requires-dist = [
     { name = "watchfiles", marker = "extra == 'reload'", specifier = ">=1.0.0" },
 ]
 provides-extras = ["pytorch", "tensorflow", "onnx", "otel", "reload", "all", "dev", "docs"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "mkdocs-material", specifier = ">=9.7.1" }]
 
 [[package]]
 name = "certifi"

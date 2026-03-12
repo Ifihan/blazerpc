@@ -69,23 +69,43 @@ class TensorOutput(Generic[DType, Shape]):
 
 
 def extract_type_info(func: Callable[..., Any]) -> dict[str, Any]:
-    """Extract input parameter types and return type from a function.
+    """Extract input parameter types, dependencies, and return type.
 
     Returns a dict with keys:
         ``"inputs"``: ``dict[str, Any]`` mapping parameter names to their
             type annotations (may be plain Python types or ``_TensorType``).
+            Only includes parameters that become Protobuf request fields.
+        ``"deps"``: ``dict[str, Depends]`` mapping parameter names to their
+            ``Depends`` instances (injected at request time).
+        ``"context_params"``: ``list[str]`` of parameter names annotated
+            with :class:`~blazerpc.context.Context`.
         ``"output"``: the return type annotation, or ``None`` if absent.
     """
+    from blazerpc.context import Context, Depends  # local import avoids circular
+
     hints = get_type_hints(func)
     sig = inspect.signature(func)
 
     inputs: dict[str, Any] = {}
+    deps: dict[str, Any] = {}
+    context_params: list[str] = []
+
     for name, param in sig.parameters.items():
-        if name in hints:
-            inputs[name] = hints[name]
+        default = param.default
+        annotation = hints.get(name, Any)
+
+        if isinstance(default, Depends):
+            deps[name] = default
+        elif annotation is Context:
+            context_params.append(name)
         else:
-            inputs[name] = Any
+            inputs[name] = annotation
 
     output = hints.get("return")
 
-    return {"inputs": inputs, "output": output}
+    return {
+        "inputs": inputs,
+        "deps": deps,
+        "context_params": context_params,
+        "output": output,
+    }

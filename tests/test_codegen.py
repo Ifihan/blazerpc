@@ -10,6 +10,7 @@ from blazerpc.app import BlazeApp
 from blazerpc.codegen.proto import ProtoGenerator, _sanitize_name, _type_to_proto_field
 from blazerpc.codegen.proto_types import build_message_classes
 from blazerpc.codegen.servicer import InferenceServicer, build_servicer
+from blazerpc.context import Context, Depends
 from blazerpc.types import TensorInput, TensorOutput, _TensorType
 
 
@@ -161,8 +162,7 @@ class TestProtoGenerator:
         @app.model("image")
         def predict(
             pixels: TensorInput[np.float32, "batch", 224, 224, 3],
-        ) -> TensorOutput[np.float32, "batch", 1000]:
-            ...
+        ) -> TensorOutput[np.float32, "batch", 1000]: ...
 
         proto = ProtoGenerator().generate(app.registry)
         assert "TensorProto pixels = 1;" in proto
@@ -178,6 +178,61 @@ class TestProtoGenerator:
         proto = ProtoGenerator().generate(app.registry)
         assert "string text = 1;" in proto
         assert "int64 count = 2;" in proto
+
+    def test_generate_excludes_context_and_depends(self) -> None:
+        """Context and Depends params must not appear in .proto fields."""
+        app = BlazeApp(enable_batching=False)
+
+        def get_version(ctx: Context) -> str:
+            return "v1"
+
+        @app.model("info")
+        def info(
+            ctx: Context,
+            text: str,
+            name: str,
+            version: str = Depends(get_version),
+        ) -> str:
+            return text
+
+        proto = ProtoGenerator().generate(app.registry)
+        # Only request fields appear
+        assert "string text = 1;" in proto
+        assert "string name = 2;" in proto
+        # Context and Depends params are excluded
+        assert "ctx" not in proto
+        assert "version" not in proto
+
+    def test_message_classes_exclude_context_and_depends(self) -> None:
+        """betterproto message classes only have request-field attributes."""
+        app = BlazeApp(enable_batching=False)
+
+        def get_version(ctx: Context) -> str:
+            return "v1"
+
+        @app.model("info")
+        def info(
+            ctx: Context,
+            text: str,
+            name: str,
+            version: str = Depends(get_version),
+        ) -> str:
+            return text
+
+        model = app.registry.get("info")
+        req_cls, resp_cls = build_message_classes(model)
+
+        # Request class has only the two request fields
+        req = req_cls(text="hello", name="world")
+        assert req.text == "hello"
+        assert req.name == "world"
+        assert not hasattr(req, "ctx")
+        assert not hasattr(req, "version")
+
+        # Round-trip works
+        parsed = req_cls().parse(bytes(req))
+        assert parsed.text == "hello"
+        assert parsed.name == "world"
 
 
 # ---------------------------------------------------------------------------

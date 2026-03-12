@@ -2,6 +2,7 @@
 
 from blazerpc.app import BlazeApp
 from blazerpc.client import BlazeClient
+from blazerpc.context import Context, Depends
 from blazerpc.exceptions import (
     BlazeRPCError,
     ConfigurationError,
@@ -18,6 +19,8 @@ __all__ = [
     "BlazeClient",
     "BlazeRPCError",
     "ConfigurationError",
+    "Context",
+    "Depends",
     "InferenceError",
     "ModelNotFoundError",
     "SerializationError",

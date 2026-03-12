@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Callable
 
 from blazerpc.codegen.servicer import build_servicer
+from blazerpc.context import AppState
 from blazerpc.runtime.batcher import Batcher
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
 from blazerpc.server.grpc import GRPCServer
 from blazerpc.server.health import build_health_service
 from blazerpc.server.middleware import Middleware
 from blazerpc.server.reflection import build_reflection_service
+
+log = logging.getLogger("blazerpc")
 
 
 def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
@@ -41,6 +45,7 @@ class BlazeApp:
     ):
         self.name = name
         self.registry = ModelRegistry()
+        self.state = AppState()
         self.enable_batching = enable_batching
         self.max_batch_size = max_batch_size
         self.batch_timeout_ms = batch_timeout_ms
@@ -70,11 +75,20 @@ class BlazeApp:
             for model in self.registry.list_models():
                 if model.streaming:
                     continue
+                if model.dep_params or model.context_params:
+                    log.warning(
+                        "Model '%s' uses Context/Depends — skipping batcher "
+                        "(batching is not compatible with dependency injection)",
+                        model.name,
+                    )
+                    continue
                 batcher = Batcher(self.max_batch_size, self.batch_timeout_ms)
                 await batcher.start(_make_batch_inference_fn(model))
                 batchers[model.name] = batcher
 
-        servicer = build_servicer(self.registry, batchers=batchers)
+        servicer = build_servicer(
+            self.registry, batchers=batchers, app_state=self.state
+        )
 
         health = build_health_service([servicer])
         reflection_handlers = build_reflection_service([servicer])
