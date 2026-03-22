@@ -31,12 +31,13 @@ class Context:
     Attributes
     ----------
     metadata
-        gRPC invocation metadata (headers) sent by the client.
+        Invocation metadata (gRPC headers or HTTP headers) sent by the client.
     peer
         Connection peer info (address, certificate).
     method
-        Full gRPC method path, e.g.
-        ``"/blazerpc.InferenceService/PredictIris"``.
+        Full method path, e.g.
+        ``"/blazerpc.InferenceService/PredictIris"`` (gRPC) or
+        ``"predict.echo"`` (JSON-RPC).
     app_state
         Reference to :attr:`BlazeApp.state`.
     """
@@ -53,6 +54,26 @@ class Context:
         self.peer = stream.peer
         self.method = method
         self.app_state = app_state
+
+    @classmethod
+    def from_raw(
+        cls,
+        metadata: Any,
+        peer: Any,
+        method: str,
+        app_state: AppState,
+    ) -> "Context":
+        """Create a Context without a grpclib Stream.
+
+        Used by protocol-agnostic code paths (e.g. JSON-RPC) that already
+        have the metadata and peer info extracted from the transport.
+        """
+        ctx = object.__new__(cls)
+        ctx.metadata = metadata
+        ctx.peer = peer
+        ctx.method = method
+        ctx.app_state = app_state
+        return ctx
 
 
 class Depends:

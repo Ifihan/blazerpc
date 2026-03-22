@@ -6,7 +6,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from blazerpc import BlazeApp, Context, Depends
-from blazerpc.codegen.servicer import _resolve_deps
+from blazerpc.codegen.invoke import resolve_deps
 from blazerpc.context import AppState
 from blazerpc.types import extract_type_info
 
@@ -199,9 +199,10 @@ async def test_resolve_deps_context_injection() -> None:
         return text
 
     model = app.registry.get("test")
-    stream = _make_mock_stream(metadata={"key": "val"})
 
-    resolved = await _resolve_deps(model, stream, "/svc/Test", app.state)
+    resolved = await resolve_deps(
+        model, {"key": "val"}, "127.0.0.1", "/svc/Test", app.state
+    )
     assert "ctx" in resolved
     assert isinstance(resolved["ctx"], Context)
     assert resolved["ctx"].method == "/svc/Test"
@@ -219,9 +220,8 @@ async def test_resolve_deps_sync_dependency() -> None:
         return text
 
     model = app.registry.get("test")
-    stream = _make_mock_stream()
 
-    resolved = await _resolve_deps(model, stream, "/svc/Test", app.state)
+    resolved = await resolve_deps(model, None, None, "/svc/Test", app.state)
     assert resolved["val"] == 99
 
 
@@ -236,9 +236,8 @@ async def test_resolve_deps_async_dependency() -> None:
         return text
 
     model = app.registry.get("test")
-    stream = _make_mock_stream()
 
-    resolved = await _resolve_deps(model, stream, "/svc/Test", app.state)
+    resolved = await resolve_deps(model, None, None, "/svc/Test", app.state)
     assert resolved["dep"] == "async_result"
 
 

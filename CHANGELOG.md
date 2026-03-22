@@ -4,6 +4,47 @@ All notable changes to BlazeRPC are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-03-22
+
+### Added
+
+- **JSON-RPC 2.0 transport** as an alternative to gRPC. The same `@app.model()`
+  handlers serve over both transports without changes.
+  - `JsonRpcDispatcher` — JSON-RPC 2.0 request dispatcher with batch support,
+    error codes (parse error, method not found, invalid params, internal error),
+    and full dependency injection (Context, Depends).
+  - `JsonRpcServer` — aiohttp-based HTTP server with three routes:
+    `POST /jsonrpc` (unary), `POST /jsonrpc/stream/{method}` (SSE streaming),
+    and `GET /health`.
+  - `JsonRpcClient` — async client with `predict()` and `stream()` methods.
+    No registry parameter needed — JSON is self-describing. Auto-converts
+    numpy arrays to/from base64-encoded tensor dicts.
+  - `tensor_to_json()` / `tensor_from_json()` — base64 tensor serialization
+    for the JSON transport.
+- `app.serve_jsonrpc(host, port)` — start only the JSON-RPC HTTP server.
+- `app.serve_both(host, grpc_port, http_port)` — start both gRPC and JSON-RPC
+  servers simultaneously with shared batchers.
+- `--transport` CLI option for `blaze serve` (values: `grpc`, `jsonrpc`, `both`).
+- `--http-port` CLI option (default `8080`) for the JSON-RPC HTTP server.
+- `Context.from_raw()` classmethod for protocol-agnostic context creation.
+- Transport-agnostic middleware base classes: `TransportMiddleware`,
+  `TransportLoggingMiddleware`, `TransportMetricsMiddleware`, `RequestInfo`,
+  and `ResponseInfo`.
+- `jsonrpc` optional dependency group (`aiohttp>=3.9.0`). Install with
+  `pip install blazerpc[jsonrpc]`.
+- JSON-RPC guide, updated architecture docs, and API reference entries for
+  all new classes.
+
+### Changed
+
+- Extracted shared model invocation logic into `blazerpc.codegen.invoke`
+  (`invoke_model`, `invoke_streaming_model`, `resolve_deps`) so both gRPC
+  and JSON-RPC transports reuse the same execution path.
+- `blazerpc.codegen.servicer` now delegates to `invoke` module instead of
+  inlining invocation and dependency resolution.
+- Batcher creation extracted to `BlazeApp._create_batchers()` for reuse
+  across transports.
+
 ## [2.1.0] - 2026-03-12
 
 ### Added

@@ -54,6 +54,25 @@ Start the gRPC server and block until a shutdown signal is received. Registers t
 | `host`    | `str` | `"0.0.0.0"`  | Bind address.     |
 | `port`    | `int` | `50051`       | Listen port.      |
 
+### `await app.serve_jsonrpc(host="0.0.0.0", port=8080)`
+
+Start the JSON-RPC HTTP server and block until shutdown. Requires `aiohttp` (`pip install blazerpc[jsonrpc]`).
+
+| Parameter | Type  | Default       | Description       |
+| --------- | ----- | ------------- | ----------------- |
+| `host`    | `str` | `"0.0.0.0"`  | Bind address.     |
+| `port`    | `int` | `8080`        | Listen port.      |
+
+### `await app.serve_both(host="0.0.0.0", grpc_port=50051, http_port=8080)`
+
+Start both gRPC and JSON-RPC servers simultaneously with shared batchers.
+
+| Parameter   | Type  | Default       | Description              |
+| ----------- | ----- | ------------- | ------------------------ |
+| `host`      | `str` | `"0.0.0.0"`  | Bind address.            |
+| `grpc_port` | `int` | `50051`       | gRPC listen port.        |
+| `http_port` | `int` | `8080`        | JSON-RPC HTTP listen port. |
+
 ### `app.state`
 
 An `AppState` instance for attaching shared resources (loaded models, database pools, config). Accessible from dependency functions via `ctx.app_state`.
@@ -92,9 +111,9 @@ def info(ctx: Context, text: str) -> str:
 
 | Attribute   | Type               | Description                                                                 |
 | ----------- | ------------------ | --------------------------------------------------------------------------- |
-| `metadata`  | `MultiDict \| None` | gRPC invocation metadata (headers) sent by the client.                    |
-| `peer`      | `Any`              | Connection peer info (address, certificate).                                |
-| `method`    | `str`              | Full gRPC method path, e.g. `"/blazerpc.InferenceService/PredictIris"`.    |
+| `metadata`  | `MultiDict \| dict` | gRPC invocation metadata or JSON-RPC HTTP headers.                         |
+| `peer`      | `Any`              | Connection peer info (address).                                             |
+| `method`    | `str`              | Method identifier. gRPC: full path. JSON-RPC: `"predict.<model>"`.          |
 | `app_state` | `AppState`         | Reference to `app.state`.                                                   |
 
 See the [dependency injection guide](guides/dependency-injection.md#context-per-request-information) for detailed usage and examples.
@@ -171,6 +190,84 @@ Make a server-streaming call. Yields each chunk's result value, deserialized fro
 ### `client.close()`
 
 Close the underlying gRPC channel. Also called automatically when using the async context manager.
+
+---
+
+## `blazerpc.JsonRpcClient`
+
+Async JSON-RPC 2.0 client for calling BlazeRPC model endpoints over HTTP. Unlike `BlazeClient`, no `registry` parameter is needed — JSON is self-describing.
+
+```python
+from blazerpc import JsonRpcClient
+
+async with JsonRpcClient("http://localhost:8080/jsonrpc") as client:
+    result = await client.predict("echo", text="hello")
+
+    async for chunk in client.stream("gen", prompt="hi"):
+        print(chunk)
+```
+
+Requires `aiohttp`: `pip install blazerpc[jsonrpc]`.
+
+### Constructor
+
+| Parameter | Type  | Default  | Description                          |
+| --------- | ----- | -------- | ------------------------------------ |
+| `url`     | `str` | required | JSON-RPC endpoint URL (e.g. `"http://localhost:8080/jsonrpc"`). |
+
+### `await client.predict(model_name, **kwargs)`
+
+Make a unary JSON-RPC prediction call. NumPy arrays in kwargs are auto-converted to base64 tensor dicts. Tensor dicts in the response are auto-converted back to NumPy arrays.
+
+| Parameter    | Type  | Description                                    |
+| ------------ | ----- | ---------------------------------------------- |
+| `model_name` | `str` | The registered model name.                     |
+| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
+
+### `async for chunk in client.stream(model_name, **kwargs)`
+
+Make a streaming call via the SSE endpoint. Yields each chunk's result value.
+
+| Parameter    | Type  | Description                                    |
+| ------------ | ----- | ---------------------------------------------- |
+| `model_name` | `str` | The registered model name.                     |
+| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
+
+### `client.close()`
+
+Close the underlying HTTP session. Also called automatically when using the async context manager.
+
+See the [JSON-RPC guide](guides/jsonrpc.md) for detailed usage and examples.
+
+---
+
+## `blazerpc.server.jsonrpc.JsonRpcServer`
+
+HTTP server for JSON-RPC 2.0 requests. Wraps `aiohttp` with lifecycle management and signal handling.
+
+```python
+from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
+from blazerpc.server.jsonrpc import JsonRpcServer
+
+server = JsonRpcServer(dispatcher, middleware=[...], grace_period=5.0)
+await server.start(host="0.0.0.0", port=8080)
+```
+
+### Constructor
+
+| Parameter      | Type                                    | Default  | Description                                                     |
+| -------------- | --------------------------------------- | -------- | --------------------------------------------------------------- |
+| `dispatcher`   | `JsonRpcDispatcher`                     | required | JSON-RPC dispatcher built from a `ModelRegistry`.               |
+| `middleware`   | `Sequence[TransportMiddleware] \| None` | `None`   | Transport-agnostic middleware instances.                         |
+| `grace_period` | `float`                                 | `5.0`    | Seconds to wait for in-flight requests during shutdown.         |
+
+### Routes
+
+| Route                           | Method | Description                              |
+| ------------------------------- | ------ | ---------------------------------------- |
+| `/jsonrpc`                      | POST   | JSON-RPC 2.0 endpoint (unary + batch).   |
+| `/jsonrpc/stream/{model}`       | POST   | SSE streaming endpoint.                  |
+| `/health`                       | GET    | Health check.                            |
 
 ---
 
@@ -275,7 +372,7 @@ Deserialize a `TensorProto` back to a NumPy array. Uses `np.frombuffer()` for ze
 
 ### `blazerpc.server.grpc.GRPCServer`
 
-Production-ready async gRPC server. Wraps `grpclib.server.Server` with signal handling and graceful shutdown.
+Production-ready async gRPC server. Wraps `grpclib.server.Server` with signal handling and graceful shutdown. See also [`JsonRpcServer`](#blazerpcserverjsonrpcjsonrpcserver) for the JSON-RPC alternative.
 
 ```python
 server = GRPCServer(handlers, middleware=[...], grace_period=5.0)
@@ -342,6 +439,23 @@ Instruments:
 ### `ExceptionMiddleware`
 
 Base class for custom exception-to-gRPC-status mapping. A no-op by default.
+
+### `TransportMiddleware`
+
+Abstract base class for transport-agnostic middleware. Works with JSON-RPC and any future transports. Subclass and implement `on_request(info: RequestInfo)` and `on_response(info: ResponseInfo)`.
+
+### `TransportLoggingMiddleware`
+
+Logs each request with method name, peer address, and transport identifier.
+
+### `TransportMetricsMiddleware`
+
+Exports Prometheus metrics with a `transport` label dimension:
+
+- `blazerpc_transport_requests_total{method, status, transport}` -- Counter.
+- `blazerpc_transport_request_duration_seconds{method, transport}` -- Histogram.
+
+See the [middleware guide](guides/middleware.md#transport-agnostic-middleware) for usage details.
 
 ---
 

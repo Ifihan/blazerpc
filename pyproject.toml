@@ -27,8 +27,9 @@ otel = [
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-exporter-otlp>=1.22.0",
 ]
+jsonrpc = ["aiohttp>=3.9.0"]
 reload = ["watchfiles>=1.0.0"]
-all = ["blazerpc[pytorch,tensorflow,onnx,otel]"]
+all = ["blazerpc[pytorch,tensorflow,onnx,otel,jsonrpc]"]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",

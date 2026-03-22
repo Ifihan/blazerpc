@@ -178,3 +178,54 @@ app = BlazeApp(
 In this example, logging fires first, then metrics, then auth. If auth rejects the request, the handler never runs, but the logging and metrics middleware still see the response event with the `UNAUTHENTICATED` status.
 
 You can also attach middleware manually to a `grpclib.server.Server` instance using `middleware.attach(server)` if you are not using `BlazeApp`.
+
+## Transport-agnostic middleware
+
+The gRPC middleware classes above are specific to grpclib. For middleware that works with both gRPC and JSON-RPC (or future transports), use `TransportMiddleware`:
+
+```python
+from blazerpc.server.middleware import TransportMiddleware, RequestInfo, ResponseInfo
+
+class MyTransportMiddleware(TransportMiddleware):
+    async def on_request(self, info: RequestInfo) -> None:
+        print(f"[{info.transport}] {info.method} from {info.peer}")
+
+    async def on_response(self, info: ResponseInfo) -> None:
+        print(f"[{info.transport}] status={info.status} duration={info.duration:.3f}s")
+```
+
+### RequestInfo
+
+| Attribute   | Type              | Description                                      |
+| ----------- | ----------------- | ------------------------------------------------ |
+| `method`    | `str`             | RPC method name (e.g. `"predict.echo"`).         |
+| `peer`      | `str`             | Client address.                                  |
+| `headers`   | `dict[str, str]`  | Request headers.                                 |
+| `transport` | `str`             | Transport identifier (`"grpc"` or `"jsonrpc"`).  |
+
+### ResponseInfo
+
+| Attribute   | Type    | Description                                      |
+| ----------- | ------- | ------------------------------------------------ |
+| `status`    | `int`   | Response status code.                            |
+| `duration`  | `float` | Request duration in seconds.                     |
+| `transport` | `str`   | Transport identifier.                            |
+
+### Built-in transport middleware
+
+| Class                          | Description                                                         |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `TransportLoggingMiddleware`   | Logs each request with method, peer, and transport.                 |
+| `TransportMetricsMiddleware`   | Prometheus metrics with a `transport` label dimension.              |
+
+Pass transport middleware to `JsonRpcServer`:
+
+```python
+from blazerpc.server.middleware import TransportLoggingMiddleware
+from blazerpc.server.jsonrpc import JsonRpcServer
+
+server = JsonRpcServer(dispatcher, middleware=[TransportLoggingMiddleware()])
+```
+
+!!! note
+    gRPC-specific `Middleware` uses grpclib events and only works with `GRPCServer`. Transport-agnostic `TransportMiddleware` works with `JsonRpcServer` (and future transports). If you need middleware that covers both, use `TransportMiddleware`.

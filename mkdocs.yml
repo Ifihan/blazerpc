@@ -1,5 +1,5 @@
 site_name: BlazeRPC
-site_description: A lightweight, framework-agnostic gRPC library for ML inference
+site_description: A lightweight, framework-agnostic RPC library for ML inference
 site_url: https://ifihan.github.io/blazerpc
 repo_url: https://github.com/Ifihan/blazerpc
 repo_name: Ifihan/blazerpc
@@ -40,6 +40,7 @@ nav:
       - Streaming: guides/streaming.md
       - Adaptive batching: guides/batching.md
       - Dependency Injection: guides/dependency-injection.md
+      - JSON-RPC transport: guides/jsonrpc.md
       - Middleware: guides/middleware.md
       - Framework integrations: guides/integrations.md
   - Configuration: configuration.md
