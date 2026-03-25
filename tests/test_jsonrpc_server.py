@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("aiohttp", reason="aiohttp required for JSON-RPC tests")
+
 from blazerpc import BlazeApp
 from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
 from blazerpc.server.jsonrpc import JsonRpcServer

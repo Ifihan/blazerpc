@@ -24,9 +24,7 @@ def serve(
     host: str = typer.Option("0.0.0.0", help="Host to bind to"),
     port: int = typer.Option(50051, help="Port to listen on (gRPC)"),
     http_port: int = typer.Option(8080, help="Port for JSON-RPC HTTP server"),
-    transport: str = typer.Option(
-        "grpc", help="Transport: grpc, jsonrpc, or both"
-    ),
+    transport: str = typer.Option("grpc", help="Transport: grpc, jsonrpc, or both"),
     workers: int = typer.Option(1, help="Number of worker processes"),
     reload: bool = typer.Option(False, help="Enable auto-reload for development"),
 ) -> None:

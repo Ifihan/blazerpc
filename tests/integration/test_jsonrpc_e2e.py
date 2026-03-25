@@ -4,9 +4,13 @@ Spins up an in-process aiohttp server, sends JSON-RPC requests
 via the JsonRpcClient, and verifies full round-trip behavior.
 """
 
+# ruff: noqa: E402
 from __future__ import annotations
 
-import aiohttp
+import pytest
+
+aiohttp = pytest.importorskip("aiohttp", reason="aiohttp required for JSON-RPC tests")
+
 import numpy as np
 
 from blazerpc import BlazeApp, Context, Depends

@@ -143,8 +143,9 @@ class JsonRpcServer:
             ):
                 data = json.dumps(chunk)
                 await response.write(f"data: {data}\n\n".encode())
-        except Exception as exc:
-            error_data = json.dumps({"error": str(exc)})
+        except Exception:
+            log.exception("Streaming error for method %s", method)
+            error_data = json.dumps({"error": "Internal server error"})
             await response.write(f"event: error\ndata: {error_data}\n\n".encode())
 
         # Signal end of stream
