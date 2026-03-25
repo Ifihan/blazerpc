@@ -1,4 +1,4 @@
-"""BlazeRPC - A lightweight, framework-agnostic gRPC library for ML inference."""
+"""BlazeRPC - A lightweight, framework-agnostic RPC library for ML inference."""
 
 from blazerpc.app import BlazeApp
 from blazerpc.client import BlazeClient
@@ -13,7 +13,13 @@ from blazerpc.exceptions import (
 )
 from blazerpc.types import TensorInput, TensorOutput
 
-__version__ = "2.1.0"
+# Lazy import to avoid requiring aiohttp when only using gRPC
+try:
+    from blazerpc.jsonrpc_client import JsonRpcClient
+except ImportError:
+    pass
+
+__version__ = "2.2.0"
 __all__ = [
     "BlazeApp",
     "BlazeClient",
@@ -22,6 +28,7 @@ __all__ = [
     "Context",
     "Depends",
     "InferenceError",
+    "JsonRpcClient",
     "ModelNotFoundError",
     "SerializationError",
     "TensorInput",

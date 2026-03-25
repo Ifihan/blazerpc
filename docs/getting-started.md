@@ -1,6 +1,6 @@
 # Getting started
 
-This guide walks you through installing BlazeRPC, training a simple model, serving it over gRPC, and calling it from a Python client.
+This guide walks you through installing BlazeRPC, training a simple model, serving it, and calling it from a Python client. We'll start with gRPC and then show how to switch to JSON-RPC.
 
 ## Installation
 
@@ -14,6 +14,7 @@ If you use a specific ML framework, install the corresponding extra:
 uv add "blazerpc[pytorch]"      # PyTorch tensor conversion helpers
 uv add "blazerpc[tensorflow]"   # TensorFlow tensor conversion helpers
 uv add "blazerpc[onnx]"         # ONNX Runtime model wrapper
+uv add "blazerpc[jsonrpc]"      # JSON-RPC transport (aiohttp)
 uv add "blazerpc[all]"          # All optional integrations
 ```
 
@@ -135,6 +136,42 @@ service InferenceService {
 
 Because BlazeRPC uses standard Protobuf encoding on the wire, this proto file works with any gRPC client -- Postman, grpcurl, or generated stubs in Go, Java, Rust, etc.
 
+## Serving over JSON-RPC
+
+If you prefer HTTP and JSON over gRPC and Protobuf, switch the transport:
+
+```bash
+blaze serve app:app --transport jsonrpc --http-port 8080
+```
+
+Call it with any HTTP client:
+
+```bash
+curl -X POST http://localhost:8080/jsonrpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "method": "predict.iris", "params": {"features": {"shape": [1, 4], "dtype": "float32", "data": "zcxMQAAAgEAzM7NA"}}, "id": 1}'
+```
+
+Or use the Python `JsonRpcClient`:
+
+```python
+import asyncio
+import numpy as np
+from blazerpc import JsonRpcClient
+
+async def main():
+    async with JsonRpcClient("http://localhost:8080/jsonrpc") as client:
+        samples = np.array([[5.1, 3.5, 1.4, 0.2]], dtype=np.float32)
+        probs = await client.predict("iris", features=samples)
+        print(probs)
+
+asyncio.run(main())
+```
+
+Unlike `BlazeClient`, `JsonRpcClient` does **not** require a `registry` parameter — JSON is self-describing. NumPy arrays are automatically serialized as base64-encoded tensor dicts.
+
+See the [JSON-RPC guide](guides/jsonrpc.md) for batch requests, streaming, and advanced usage.
+
 ## Multiple models
 
 Register as many models as you need on the same app. Each model becomes its own RPC method:
@@ -166,7 +203,8 @@ All three models are served under the same `InferenceService` and discovered thr
 
 ## Next steps
 
-- [Dependency injection](guides/dependency-injection.md) -- Access gRPC metadata, share resources, and inject dependencies FastAPI-style.
+- [JSON-RPC transport](guides/jsonrpc.md) -- Serve models over JSON-RPC 2.0 with HTTP.
+- [Dependency injection](guides/dependency-injection.md) -- Access request metadata, share resources, and inject dependencies FastAPI-style.
 - [Streaming](guides/streaming.md) -- Return tokens incrementally for LLM workloads.
 - [Adaptive batching](guides/batching.md) -- Group requests into batches for GPU efficiency.
 - [Framework integrations](guides/integrations.md) -- Use PyTorch, TensorFlow, or ONNX Runtime with automatic tensor conversion.

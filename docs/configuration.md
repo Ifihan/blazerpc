@@ -43,6 +43,30 @@ def predict_sentiment(text: list[str]) -> list[float]:
 | `version`   | `str`  | `"1"`    | Model version string. Stored as metadata; does not affect routing.   |
 | `streaming` | `bool` | `False`  | If `True`, the function must be an async generator that yields responses. Produces a `returns (stream Response)` RPC. |
 
+## `JsonRpcServer` constructor
+
+These parameters control the JSON-RPC HTTP server. Set internally by `BlazeApp.serve_jsonrpc()` and `BlazeApp.serve_both()`.
+
+```python
+from blazerpc.server.jsonrpc import JsonRpcServer
+
+server = JsonRpcServer(dispatcher, middleware=[...], grace_period=5.0)
+await server.start(host="0.0.0.0", port=8080)
+```
+
+| Parameter      | Type                                    | Default  | Description                                                     |
+| -------------- | --------------------------------------- | -------- | --------------------------------------------------------------- |
+| `dispatcher`   | `JsonRpcDispatcher`                     | required | The JSON-RPC dispatcher built from a `ModelRegistry`.           |
+| `middleware`   | `Sequence[TransportMiddleware] \| None` | `None`   | Transport-agnostic middleware instances.                         |
+| `grace_period` | `float`                                 | `5.0`    | Seconds to wait for in-flight requests during shutdown.         |
+
+### `server.start()` parameters
+
+| Parameter | Type  | Default      | Description       |
+| --------- | ----- | ------------ | ----------------- |
+| `host`    | `str` | `"0.0.0.0"`  | Bind address.     |
+| `port`    | `int` | `8080`        | Listen port.      |
+
 ## `GRPCServer` constructor
 
 These parameters control the underlying gRPC server behavior. They are set internally by `BlazeApp.serve()` but can be used directly if you instantiate `GRPCServer` yourself.
@@ -79,7 +103,9 @@ blaze serve <app_path> [OPTIONS]
 | ----------------- | ------- | ------------ | ---------------------------------------------------- |
 | `app_path`        | `str`   | required     | App import path in `module:attribute` format (e.g. `app:app`). |
 | `--host`          | `str`   | `"0.0.0.0"`  | Host to bind to.                                     |
-| `--port`          | `int`   | `50051`       | Port to listen on.                                   |
+| `--port`          | `int`   | `50051`       | Port to listen on (gRPC).                            |
+| `--http-port`     | `int`   | `8080`        | Port for the JSON-RPC HTTP server.                   |
+| `--transport`     | `str`   | `"grpc"`      | Transport mode: `grpc`, `jsonrpc`, or `both`.        |
 | `--workers`       | `int`   | `1`          | Number of worker processes.                          |
 | `--reload`        | `bool`  | `False`       | Enable auto-reload for development. Requires `watchfiles`. |
 

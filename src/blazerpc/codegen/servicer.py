@@ -10,20 +10,18 @@ built at startup by :mod:`blazerpc.codegen.proto_types`.
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 from typing import Any, Callable
 
 import numpy as np
 from grpclib.const import Cardinality, Handler
 from grpclib.server import Stream
 
+from blazerpc.codegen.invoke import invoke_model, invoke_streaming_model, resolve_deps
 from blazerpc.codegen.proto import _sanitize_name
 from blazerpc.codegen.proto_types import (
     _TensorProtoMsg,
     build_message_classes,
 )
-from blazerpc.exceptions import InferenceError
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
 from blazerpc.runtime.serialization import deserialize_tensor, serialize_tensor
 from blazerpc.types import _TensorType
@@ -124,22 +122,12 @@ def _make_unary_handler(
         kwargs = _decode_request(request_bytes, model, request_cls)
 
         if _has_deps:
-            dep_kwargs = await _resolve_deps(model, stream, method, app_state)
+            dep_kwargs = await resolve_deps(
+                model, stream.metadata, stream.peer, method, app_state
+            )
             kwargs = {**kwargs, **dep_kwargs}
 
-        try:
-            if batcher is not None:
-                # Batcher receives only request-field kwargs (no deps).
-                request_only = {
-                    k: v for k, v in kwargs.items() if k in model.input_types
-                }
-                raw_result = await batcher.submit(request_only)
-            elif asyncio.iscoroutinefunction(model.func):
-                raw_result = await model.func(**kwargs)
-            else:
-                raw_result = await asyncio.to_thread(model.func, **kwargs)
-        except Exception as exc:
-            raise InferenceError(str(exc), model_name=model.name) from exc
+        raw_result = await invoke_model(model, kwargs, batcher=batcher)
 
         response_bytes = _encode_response(raw_result, model, response_cls)
         await stream.send_message(response_bytes)
@@ -163,47 +151,16 @@ def _make_streaming_handler(
         kwargs = _decode_request(request_bytes, model, request_cls)
 
         if _has_deps:
-            dep_kwargs = await _resolve_deps(model, stream, method, app_state)
+            dep_kwargs = await resolve_deps(
+                model, stream.metadata, stream.peer, method, app_state
+            )
             kwargs = {**kwargs, **dep_kwargs}
 
-        try:
-            if inspect.isasyncgenfunction(model.func):
-                async for chunk in model.func(**kwargs):
-                    response_bytes = _encode_response(chunk, model, response_cls)
-                    await stream.send_message(response_bytes)
-            else:
-                for chunk in model.func(**kwargs):
-                    response_bytes = _encode_response(chunk, model, response_cls)
-                    await stream.send_message(response_bytes)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            raise InferenceError(str(exc), model_name=model.name) from exc
+        async for chunk in invoke_streaming_model(model, kwargs):
+            response_bytes = _encode_response(chunk, model, response_cls)
+            await stream.send_message(response_bytes)
 
     return _handler
-
-
-async def _resolve_deps(
-    model: ModelInfo,
-    stream: Stream[Any, Any],
-    method: str,
-    app_state: Any | None,
-) -> dict[str, Any]:
-    """Resolve all ``Depends()`` and ``Context`` injections for a model call."""
-    from blazerpc.context import AppState, Context
-
-    _state = app_state if app_state is not None else AppState()
-    ctx = Context(stream=stream, method=method, app_state=_state)
-
-    resolved: dict[str, Any] = {}
-    for name in model.context_params:
-        resolved[name] = ctx
-    for name, dep in model.dep_params.items():
-        if asyncio.iscoroutinefunction(dep.fn):
-            resolved[name] = await dep.fn(ctx)
-        else:
-            resolved[name] = dep.fn(ctx)
-    return resolved
 
 
 # ---------------------------------------------------------------------------

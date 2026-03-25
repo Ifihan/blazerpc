@@ -68,23 +68,37 @@ class BlazeApp:
 
         return decorator
 
+    # ------------------------------------------------------------------
+    # Batcher management (shared across transports)
+    # ------------------------------------------------------------------
+
+    async def _create_batchers(self) -> dict[str, Batcher]:
+        """Create and start batchers for eligible models."""
+        batchers: dict[str, Batcher] = {}
+        if not self.enable_batching:
+            return batchers
+        for model_info in self.registry.list_models():
+            if model_info.streaming:
+                continue
+            if model_info.dep_params or model_info.context_params:
+                log.warning(
+                    "Model '%s' uses Context/Depends — skipping batcher "
+                    "(batching is not compatible with dependency injection)",
+                    model_info.name,
+                )
+                continue
+            batcher = Batcher(self.max_batch_size, self.batch_timeout_ms)
+            await batcher.start(_make_batch_inference_fn(model_info))
+            batchers[model_info.name] = batcher
+        return batchers
+
+    # ------------------------------------------------------------------
+    # gRPC transport
+    # ------------------------------------------------------------------
+
     async def serve(self, host: str = "0.0.0.0", port: int = 50051) -> None:
         """Start the gRPC server and block until shutdown."""
-        batchers: dict[str, Batcher] = {}
-        if self.enable_batching:
-            for model in self.registry.list_models():
-                if model.streaming:
-                    continue
-                if model.dep_params or model.context_params:
-                    log.warning(
-                        "Model '%s' uses Context/Depends — skipping batcher "
-                        "(batching is not compatible with dependency injection)",
-                        model.name,
-                    )
-                    continue
-                batcher = Batcher(self.max_batch_size, self.batch_timeout_ms)
-                await batcher.start(_make_batch_inference_fn(model))
-                batchers[model.name] = batcher
+        batchers = await self._create_batchers()
 
         servicer = build_servicer(
             self.registry, batchers=batchers, app_state=self.state
@@ -98,6 +112,67 @@ class BlazeApp:
 
         try:
             await server.start(host, port)
+        finally:
+            for batcher in batchers.values():
+                await batcher.stop()
+
+    # ------------------------------------------------------------------
+    # JSON-RPC transport
+    # ------------------------------------------------------------------
+
+    async def serve_jsonrpc(self, host: str = "0.0.0.0", port: int = 8080) -> None:
+        """Start the JSON-RPC HTTP server and block until shutdown."""
+        from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
+        from blazerpc.server.jsonrpc import JsonRpcServer
+
+        batchers = await self._create_batchers()
+        dispatcher = JsonRpcDispatcher(
+            self.registry, batchers=batchers, app_state=self.state
+        )
+        server = JsonRpcServer(dispatcher)
+
+        try:
+            await server.start(host, port)
+        finally:
+            for batcher in batchers.values():
+                await batcher.stop()
+
+    # ------------------------------------------------------------------
+    # Both transports
+    # ------------------------------------------------------------------
+
+    async def serve_both(
+        self,
+        host: str = "0.0.0.0",
+        grpc_port: int = 50051,
+        http_port: int = 8080,
+    ) -> None:
+        """Start both gRPC and JSON-RPC servers with shared batchers."""
+        from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
+        from blazerpc.server.jsonrpc import JsonRpcServer
+
+        batchers = await self._create_batchers()
+
+        # gRPC
+        servicer = build_servicer(
+            self.registry, batchers=batchers, app_state=self.state
+        )
+        health = build_health_service([servicer])
+        reflection_handlers = build_reflection_service([servicer])
+        handlers = [servicer, health, *reflection_handlers]
+        grpc_server = GRPCServer(handlers, middleware=self.middleware)
+
+        # JSON-RPC
+        dispatcher = JsonRpcDispatcher(
+            self.registry, batchers=batchers, app_state=self.state
+        )
+        jsonrpc_server = JsonRpcServer(dispatcher)
+
+        try:
+            await asyncio.gather(
+                grpc_server.start(host, grpc_port),
+                jsonrpc_server.start(host, http_port),
+            )
         finally:
             for batcher in batchers.values():
                 await batcher.stop()

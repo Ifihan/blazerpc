@@ -198,3 +198,99 @@ class ExceptionMiddleware(Middleware):
 
     async def on_response(self, event: SendTrailingMetadata) -> None:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Transport-agnostic middleware (for JSON-RPC and future transports)
+# ---------------------------------------------------------------------------
+
+
+class RequestInfo:
+    """Transport-agnostic request metadata."""
+
+    __slots__ = ("method", "peer", "headers", "transport")
+
+    def __init__(
+        self,
+        method: str,
+        peer: str,
+        headers: dict[str, str],
+        transport: str,
+    ) -> None:
+        self.method = method
+        self.peer = peer
+        self.headers = headers
+        self.transport = transport
+
+
+class ResponseInfo:
+    """Transport-agnostic response metadata."""
+
+    __slots__ = ("status", "duration", "transport")
+
+    def __init__(self, status: int, duration: float, transport: str) -> None:
+        self.status = status
+        self.duration = duration
+        self.transport = transport
+
+
+class TransportMiddleware(ABC):
+    """Base class for transport-agnostic middleware.
+
+    Works with JSON-RPC and any future transports, unlike
+    :class:`Middleware` which is gRPC-specific.
+    """
+
+    @abstractmethod
+    async def on_request(self, info: RequestInfo) -> None:
+        """Called when a request is received."""
+
+    @abstractmethod
+    async def on_response(self, info: ResponseInfo) -> None:
+        """Called when a response is about to be sent."""
+
+
+class TransportLoggingMiddleware(TransportMiddleware):
+    """Logs each request with method name, peer, and transport."""
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._log = logger or log
+
+    async def on_request(self, info: RequestInfo) -> None:
+        self._log.info(
+            "[%s] Request: %s from %s", info.transport, info.method, info.peer
+        )
+
+    async def on_response(self, info: ResponseInfo) -> None:
+        self._log.info(
+            "[%s] Response: status=%s duration=%.3fs",
+            info.transport,
+            info.status,
+            info.duration,
+        )
+
+
+class TransportMetricsMiddleware(TransportMiddleware):
+    """Prometheus metrics with a ``transport`` label dimension."""
+
+    _COUNTER = Counter(
+        "blazerpc_transport_requests_total",
+        "Total requests by transport",
+        ["method", "status", "transport"],
+    )
+    _HISTOGRAM = Histogram(
+        "blazerpc_transport_request_duration_seconds",
+        "Request duration by transport",
+        ["method", "transport"],
+    )
+
+    async def on_request(self, info: RequestInfo) -> None:
+        pass  # timing is handled at the server level
+
+    async def on_response(self, info: ResponseInfo) -> None:
+        self._COUNTER.labels(
+            method="", status=str(info.status), transport=info.transport
+        ).inc()
+        self._HISTOGRAM.labels(method="", transport=info.transport).observe(
+            info.duration
+        )

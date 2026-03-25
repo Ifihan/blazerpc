@@ -22,11 +22,13 @@ app = typer.Typer(
 def serve(
     app_path: str = typer.Argument(..., help="App import path (e.g. app:app)"),
     host: str = typer.Option("0.0.0.0", help="Host to bind to"),
-    port: int = typer.Option(50051, help="Port to listen on"),
+    port: int = typer.Option(50051, help="Port to listen on (gRPC)"),
+    http_port: int = typer.Option(8080, help="Port for JSON-RPC HTTP server"),
+    transport: str = typer.Option("grpc", help="Transport: grpc, jsonrpc, or both"),
     workers: int = typer.Option(1, help="Number of worker processes"),
     reload: bool = typer.Option(False, help="Enable auto-reload for development"),
 ) -> None:
-    """Start the BlazeRPC gRPC server."""
+    """Start the BlazeRPC server."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -58,10 +60,23 @@ def serve(
     for m in models:
         tag = " (stream)" if m.streaming else ""
         typer.echo(f"  ✓ Loaded model: {m.name} v{m.version}{tag}")
-    typer.echo(f"  ✓ Server listening on {host}:{port}")
-    typer.echo("")
 
-    asyncio.run(blaze_app.serve(host, port))
+    if transport == "grpc":
+        typer.echo(f"  ✓ gRPC listening on {host}:{port}")
+        typer.echo("")
+        asyncio.run(blaze_app.serve(host, port))
+    elif transport == "jsonrpc":
+        typer.echo(f"  ✓ JSON-RPC listening on {host}:{http_port}")
+        typer.echo("")
+        asyncio.run(blaze_app.serve_jsonrpc(host, http_port))
+    elif transport == "both":
+        typer.echo(f"  ✓ gRPC listening on {host}:{port}")
+        typer.echo(f"  ✓ JSON-RPC listening on {host}:{http_port}")
+        typer.echo("")
+        asyncio.run(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
+    else:
+        typer.echo(f"Unknown transport: {transport}. Use grpc, jsonrpc, or both.")
+        raise typer.Exit(1)
 
 
 @app.command()
