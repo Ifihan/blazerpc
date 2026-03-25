@@ -261,7 +261,7 @@ wheels = [
 
 [[package]]
 name = "blazerpc"
-version = "2.1.0"
+version = "2.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "betterproto" },
@@ -285,6 +285,7 @@ all = [
     { name = "torch" },
 ]
 dev = [
+    { name = "aiohttp" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -324,6 +325,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.9.0" },
     { name = "aiohttp", marker = "extra == 'jsonrpc'", specifier = ">=3.9.0" },
     { name = "betterproto", specifier = ">=2.0.0b6" },
     { name = "blazerpc", extras = ["pytorch", "tensorflow", "onnx", "otel", "jsonrpc"], marker = "extra == 'all'" },
