@@ -4,6 +4,35 @@ All notable changes to BlazeRPC are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-06-26
+
+### Security
+
+- **aiohttp** bumped to `>=3.11.0` (from `>=3.9.0`) in `jsonrpc` and `dev` extras —
+  fixes ~20 CVEs including cross-origin credential leakage (DigestAuth, cookies,
+  Proxy-Authorization header), websocket memory limit bypass, HTTP/1 pipelining DoS,
+  CRLF injection in multipart headers, C parser null-byte injection, and TLS hostname
+  override when reusing connections.
+- **pytest** bumped to `>=8.1.0` (from `>=7.4.0`) — fixes vulnerable `tmpdir`
+  handling (CVE-2024-6345).
+- **pymdown-extensions** bumped to `>=10.14.3` (from `>=10.0`) — fixes path traversal
+  bypass regression in `pymdownx.snippets` `restrict_base_path`.
+- **urllib3** floor raised to `>=2.3.0` in `pytorch`, `tensorflow`, and `dev` extras —
+  fixes sensitive header forwarding across origins in proxied redirects and
+  decompression-bomb safeguard bypass in streaming API.
+- **pillow** floor raised to `>=10.4.0` in `tensorflow` extra — fixes OOB write with
+  invalid PSD tile extents, FITS GZIP decompression bomb, heap buffer overflow with
+  nested list coordinates, integer overflow in font processing, and PDF trailer
+  infinite loop DoS.
+- **keras** floor raised to `>=3.3.0` in `tensorflow` extra — fixes untrusted
+  deserialization vulnerability.
+- **idna** floor raised to `>=3.7` in `jsonrpc` and `dev` extras — fixes bypass of the
+  CVE-2024-3651 fix in `idna.encode()`.
+- GitHub Actions: added `permissions: contents: read` to all jobs in `ci.yml` and
+  `publish.yml` to enforce least-privilege token scope.
+
+---
+
 ## [2.2.0] - 2026-03-25
 
 ### Added
