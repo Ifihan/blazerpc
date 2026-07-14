@@ -57,3 +57,24 @@ def test_app_accepts_middleware() -> None:
 def test_app_middleware_defaults_to_empty() -> None:
     app = BlazeApp()
     assert app.middleware == []
+
+
+def test_app_configures_batch_queue_capacity() -> None:
+    app = BlazeApp(max_queue_size=17)
+    assert app.max_queue_size == 17
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_batch_size": 0}, "max_batch_size"),
+        ({"batch_timeout_ms": -1}, "batch_timeout_ms"),
+        ({"batch_timeout_ms": float("nan")}, "batch_timeout_ms"),
+        ({"max_queue_size": 0}, "max_queue_size"),
+    ],
+)
+def test_app_rejects_invalid_batch_configuration(
+    kwargs: dict, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        BlazeApp(**kwargs)

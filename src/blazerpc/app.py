@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import Any, Callable
 
 from blazerpc.codegen.servicer import build_servicer
@@ -42,13 +43,35 @@ class BlazeApp:
         max_batch_size: int = 32,
         batch_timeout_ms: float = 10.0,
         middleware: list[Middleware] | None = None,
+        max_queue_size: int = 1024,
     ):
+        if (
+            isinstance(max_batch_size, bool)
+            or not isinstance(max_batch_size, int)
+            or max_batch_size <= 0
+        ):
+            raise ValueError("max_batch_size must be a positive integer")
+        if (
+            isinstance(batch_timeout_ms, bool)
+            or not isinstance(batch_timeout_ms, (int, float))
+            or not math.isfinite(batch_timeout_ms)
+            or batch_timeout_ms < 0
+        ):
+            raise ValueError("batch_timeout_ms must be a finite non-negative number")
+        if (
+            isinstance(max_queue_size, bool)
+            or not isinstance(max_queue_size, int)
+            or max_queue_size <= 0
+        ):
+            raise ValueError("max_queue_size must be a positive integer")
+
         self.name = name
         self.registry = ModelRegistry()
         self.state = AppState()
         self.enable_batching = enable_batching
         self.max_batch_size = max_batch_size
         self.batch_timeout_ms = batch_timeout_ms
+        self.max_queue_size = max_queue_size
         if middleware is None:
             self.middleware: list[Middleware] = []
         else:
@@ -87,7 +110,9 @@ class BlazeApp:
                     model_info.name,
                 )
                 continue
-            batcher = Batcher(self.max_batch_size, self.batch_timeout_ms)
+            batcher = Batcher(
+                self.max_batch_size, self.batch_timeout_ms, self.max_queue_size
+            )
             await batcher.start(_make_batch_inference_fn(model_info))
             batchers[model_info.name] = batcher
         return batchers

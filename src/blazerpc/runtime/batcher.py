@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -35,21 +36,62 @@ class Batcher:
     timeout_ms:
         Maximum time (in milliseconds) to wait for a full batch
         before dispatching a partial one.
+    max_queue_size:
+        Maximum number of requests waiting for admission to a batch.
     """
 
-    def __init__(self, max_size: int = 32, timeout_ms: float = 10.0) -> None:
+    def __init__(
+        self,
+        max_size: int = 32,
+        timeout_ms: float = 10.0,
+        max_queue_size: int = 1024,
+    ) -> None:
+        if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size <= 0:
+            raise ValueError("max_size must be a positive integer")
+        if (
+            isinstance(timeout_ms, bool)
+            or not isinstance(timeout_ms, (int, float))
+            or not math.isfinite(timeout_ms)
+            or timeout_ms < 0
+        ):
+            raise ValueError("timeout_ms must be a finite non-negative number")
+        if (
+            isinstance(max_queue_size, bool)
+            or not isinstance(max_queue_size, int)
+            or max_queue_size <= 0
+        ):
+            raise ValueError("max_queue_size must be a positive integer")
+
         self.max_size = max_size
         self.timeout = timeout_ms / 1000
-        self.queue: asyncio.Queue[BatchItem] = asyncio.Queue()
+        self.queue: asyncio.Queue[BatchItem] = asyncio.Queue(maxsize=max_queue_size)
         self._running = False
+        self._accepting = True
         self._task: asyncio.Task[None] | None = None
+        self._pending: dict[asyncio.Future[Any], BatchItem] = {}
 
     async def submit(self, request: Any) -> Any:
         """Submit a request and wait for the batched result."""
+        if not self._accepting:
+            raise RuntimeError("batcher is stopped")
+
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
-        await self.queue.put(BatchItem(request, future))
-        return await future
+        item = BatchItem(request, future)
+        self._pending[future] = item
+        try:
+            try:
+                self.queue.put_nowait(item)
+            except asyncio.QueueFull as exc:
+                item.request = None
+                raise RuntimeError("batcher queue is full") from exc
+            return await future
+        except asyncio.CancelledError:
+            future.cancel()
+            item.request = None
+            raise
+        finally:
+            self._pending.pop(future, None)
 
     async def start(self, inference_fn: Callable[..., Any]) -> None:
         """Start the background batching loop.
@@ -62,12 +104,17 @@ class Batcher:
         """
         if self._running:
             return
+        self._accepting = True
         self._running = True
         self._task = asyncio.create_task(self._process_loop(inference_fn))
 
     async def stop(self) -> None:
-        """Stop the batching loop and drain remaining items."""
+        """Stop the batching loop and cancel all unresolved submissions."""
+        self._accepting = False
         self._running = False
+        for future, item in list(self._pending.items()):
+            item.request = None
+            future.cancel()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -75,6 +122,9 @@ class Batcher:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        while not self.queue.empty():
+            item = self.queue.get_nowait()
+            item.request = None
 
     # ------------------------------------------------------------------
     # Internal
@@ -101,6 +151,10 @@ class Batcher:
         """Main batching loop — runs as a background task."""
         while self._running:
             batch = await self._collect_batch()
+            if not batch:
+                continue
+
+            batch = [item for item in batch if not item.future.done()]
             if not batch:
                 continue
 
@@ -138,5 +192,6 @@ class Batcher:
         Kept for backwards compatibility — prefer :meth:`start` /
         :meth:`stop` for non-blocking lifecycle management.
         """
+        self._accepting = True
         self._running = True
         await self._process_loop(inference_fn)

@@ -152,3 +152,104 @@ async def test_batcher_start_stop_idempotent() -> None:
 
     await batcher.stop()
     await batcher.stop()  # Second stop is a no-op
+
+
+@pytest.mark.asyncio
+async def test_queue_capacity_rejects_excess_requests() -> None:
+    inference_started = asyncio.Event()
+    release_inference = asyncio.Event()
+    batcher = Batcher(max_size=1, timeout_ms=0, max_queue_size=1)
+
+    async def inference_fn(batch: list) -> list:
+        inference_started.set()
+        await release_inference.wait()
+        return [item["x"] for item in batch]
+
+    await batcher.start(inference_fn)
+    first = asyncio.create_task(batcher.submit({"x": 1}))
+    await inference_started.wait()
+    second = asyncio.create_task(batcher.submit({"x": 2}))
+    await asyncio.sleep(0)
+
+    assert batcher.queue.full()
+    with pytest.raises(RuntimeError, match="queue is full"):
+        await batcher.submit({"x": 3})
+
+    release_inference.set()
+    assert await asyncio.gather(first, second) == [1, 2]
+    await batcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_request_is_not_processed() -> None:
+    inference_started = asyncio.Event()
+    release_inference = asyncio.Event()
+    processed: list[int] = []
+    batcher = Batcher(max_size=1, timeout_ms=0, max_queue_size=1)
+
+    async def inference_fn(batch: list) -> list:
+        processed.extend(item["x"] for item in batch)
+        inference_started.set()
+        await release_inference.wait()
+        return [item["x"] for item in batch]
+
+    await batcher.start(inference_fn)
+    first = asyncio.create_task(batcher.submit({"x": 1}))
+    await inference_started.wait()
+    queued = asyncio.create_task(batcher.submit({"x": 2}))
+    await asyncio.sleep(0)
+
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+
+    release_inference.set()
+    assert await first == 1
+    await asyncio.sleep(0)
+    assert processed == [1]
+    await batcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_in_flight_and_queued_requests() -> None:
+    inference_started = asyncio.Event()
+    inference_cancelled = asyncio.Event()
+    batcher = Batcher(max_size=1, timeout_ms=0, max_queue_size=1)
+
+    async def inference_fn(batch: list) -> list:
+        inference_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            inference_cancelled.set()
+            raise
+        return batch
+
+    await batcher.start(inference_fn)
+    in_flight = asyncio.create_task(batcher.submit({"x": 1}))
+    await inference_started.wait()
+    queued = asyncio.create_task(batcher.submit({"x": 2}))
+    await asyncio.sleep(0)
+
+    await batcher.stop()
+
+    results = await asyncio.gather(in_flight, queued, return_exceptions=True)
+    assert all(isinstance(result, asyncio.CancelledError) for result in results)
+    assert inference_cancelled.is_set()
+    assert batcher.queue.empty()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_size": 0}, "max_size"),
+        ({"timeout_ms": -1}, "timeout_ms"),
+        ({"timeout_ms": float("inf")}, "timeout_ms"),
+        ({"max_queue_size": 0}, "max_queue_size"),
+    ],
+)
+def test_batcher_rejects_invalid_numeric_configuration(
+    kwargs: dict, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Batcher(**kwargs)
