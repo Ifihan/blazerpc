@@ -248,16 +248,19 @@ class AuthMiddleware(Middleware):
 ```bash
 blaze serve <app_path> [OPTIONS]
 
-  Start the BlazeRPC gRPC server.
+  Start the BlazeRPC server.
 
   Arguments:
     app_path    App import path in module:attribute format (e.g. app:app)
 
   Options:
-    --host TEXT       Host to bind to              [default: 0.0.0.0]
-    --port INTEGER    Port to listen on            [default: 50051]
-    --workers INTEGER Number of worker processes   [default: 1]
-    --reload          Enable auto-reload           [default: False]
+    --host TEXT        Host to bind to                    [default: 0.0.0.0]
+    --port INTEGER     Port for gRPC                      [default: 50051]
+    --http-port INTEGER
+                       Port for JSON-RPC HTTP             [default: 8080]
+    --transport TEXT   Transport: grpc, jsonrpc, or both  [default: grpc]
+    --workers INTEGER  Worker count (only 1 is supported) [default: 1]
+    --reload           Enable auto-reload                 [default: False]
 ```
 
 ```bash

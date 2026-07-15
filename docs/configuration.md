@@ -111,15 +111,15 @@ blaze serve <app_path> [OPTIONS]
 | ----------------- | ------- | ------------ | ---------------------------------------------------- |
 | `app_path`        | `str`   | required     | App import path in `module:attribute` format (e.g. `app:app`). |
 | `--host`          | `str`   | `"0.0.0.0"`  | Host to bind to.                                     |
-| `--port`          | `int`   | `50051`       | Port to listen on (gRPC).                            |
-| `--http-port`     | `int`   | `8080`        | Port for the JSON-RPC HTTP server.                   |
+| `--port`          | `int`   | `50051`       | Port to listen on (gRPC), from `1` to `65535`.       |
+| `--http-port`     | `int`   | `8080`        | Port for JSON-RPC HTTP, from `1` to `65535`. Must differ from `--port` with `--transport both`. |
 | `--transport`     | `str`   | `"grpc"`      | Transport mode: `grpc`, `jsonrpc`, or `both`.        |
-| `--workers`       | `int`   | `1`          | Number of worker processes.                          |
+| `--workers`       | `int`   | `1`          | Worker count. Only `1` is currently supported; other values are rejected. |
 | `--reload`        | `bool`  | `False`       | Enable auto-reload for development. Requires `watchfiles`. |
 
 #### Hot reload
 
-When `--reload` is enabled, the server watches for `.py` file changes in the current directory and automatically restarts when changes are detected. This uses process-level restart (like uvicorn) for a clean reimport of all modules.
+When `--reload` is enabled, the server watches for `.py` file changes in the current directory and automatically restarts when changes are detected. This uses process-level restart (like uvicorn) for a clean reimport of all modules. The selected transport and its configured `--port` and `--http-port` are preserved across restarts.
 
 ```bash
 blaze serve app:app --reload

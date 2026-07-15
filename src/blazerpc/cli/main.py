@@ -7,15 +7,43 @@ import logging
 
 import typer
 
+from blazerpc.cli.reload import run_with_reload
 from blazerpc.cli.proto import export_proto
 from blazerpc.cli.serve import load_app
-from blazerpc.cli.reload import run_with_reload
 
 app = typer.Typer(
     name="blaze",
     help="BlazeRPC - Lightning-fast gRPC for ML inference",
     add_completion=False,
 )
+
+_TRANSPORTS = ("grpc", "jsonrpc", "both")
+
+
+def _validate_serve_options(
+    transport: str, workers: int, port: int, http_port: int
+) -> None:
+    if transport not in _TRANSPORTS:
+        raise typer.BadParameter(
+            "must be grpc, jsonrpc, or both", param_hint="--transport"
+        )
+    if workers != 1:
+        raise typer.BadParameter(
+            "only 1 worker is supported", param_hint="--workers"
+        )
+    if not 1 <= port <= 65535:
+        raise typer.BadParameter(
+            "must be between 1 and 65535", param_hint="--port"
+        )
+    if not 1 <= http_port <= 65535:
+        raise typer.BadParameter(
+            "must be between 1 and 65535", param_hint="--http-port"
+        )
+    if transport == "both" and port == http_port:
+        raise typer.BadParameter(
+            "must differ from --port when using both transports",
+            param_hint="--http-port",
+        )
 
 
 @app.command()
@@ -25,7 +53,7 @@ def serve(
     port: int = typer.Option(50051, help="Port to listen on (gRPC)"),
     http_port: int = typer.Option(8080, help="Port for JSON-RPC HTTP server"),
     transport: str = typer.Option("grpc", help="Transport: grpc, jsonrpc, or both"),
-    workers: int = typer.Option(1, help="Number of worker processes"),
+    workers: int = typer.Option(1, help="Worker count (only 1 is supported)"),
     reload: bool = typer.Option(False, help="Enable auto-reload for development"),
 ) -> None:
     """Start the BlazeRPC server."""
@@ -34,13 +62,18 @@ def serve(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    _validate_serve_options(transport, workers, port, http_port)
+
     if reload:
         typer.echo("")
         typer.echo("⚡ BlazeRPC server starting (reload mode)...")
         typer.echo("  ✓ Watching for changes in current directory")
-        typer.echo(f"  ✓ Server will listen on {host}:{port}")
+        if transport in ("grpc", "both"):
+            typer.echo(f"  ✓ gRPC will listen on {host}:{port}")
+        if transport in ("jsonrpc", "both"):
+            typer.echo(f"  ✓ JSON-RPC will listen on {host}:{http_port}")
         typer.echo("")
-        run_with_reload(app_path, host, port)
+        run_with_reload(app_path, host, port, http_port, transport)
         return
 
     blaze_app = load_app(app_path)
@@ -74,9 +107,6 @@ def serve(
         typer.echo(f"  ✓ JSON-RPC listening on {host}:{http_port}")
         typer.echo("")
         asyncio.run(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
-    else:
-        typer.echo(f"Unknown transport: {transport}. Use grpc, jsonrpc, or both.")
-        raise typer.Exit(1)
 
 
 @app.command()
