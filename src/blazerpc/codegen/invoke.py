@@ -9,10 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable, Iterable, Iterator, cast
 
 from blazerpc.exceptions import InferenceError
 from blazerpc.runtime.registry import ModelInfo
+
+
+def _next(iterator: Iterator[Any]) -> tuple[bool, Any]:
+    """Advance an iterator without leaking StopIteration into an asyncio Future."""
+    try:
+        return True, next(iterator)
+    except StopIteration:
+        return False, None
+
+
+def _call_and_iter(
+    func: Callable[..., object], kwargs: dict[str, Any]
+) -> Iterator[Any]:
+    return iter(cast(Iterable[Any], func(**kwargs)))
 
 
 async def invoke_model(
@@ -53,7 +67,11 @@ async def invoke_streaming_model(
             async for chunk in model.func(**kwargs):
                 yield chunk
         else:
-            for chunk in model.func(**kwargs):
+            iterator = await asyncio.to_thread(_call_and_iter, model.func, kwargs)
+            while True:
+                has_chunk, chunk = await asyncio.to_thread(_next, iterator)
+                if not has_chunk:
+                    break
                 yield chunk
     except asyncio.CancelledError:
         raise
@@ -87,5 +105,5 @@ async def resolve_deps(
         if asyncio.iscoroutinefunction(dep.fn):
             resolved[name] = await dep.fn(ctx)
         else:
-            resolved[name] = dep.fn(ctx)
+            resolved[name] = await asyncio.to_thread(dep.fn, ctx)
     return resolved

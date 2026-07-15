@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 import pytest
 
 from blazerpc import BlazeApp, Context, Depends
@@ -81,6 +84,29 @@ async def test_invoke_sync_streaming_model() -> None:
     assert chunks == [0, 1, 2]
 
 
+async def test_sync_streaming_model_does_not_block_event_loop() -> None:
+    app = BlazeApp(enable_batching=False)
+    release = threading.Event()
+    event_loop_ran = threading.Event()
+
+    @app.model("blocking_gen", streaming=True)
+    def blocking_gen(n: int) -> bool:
+        yield release.wait(timeout=1)
+
+    async def release_from_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_ran.set()
+        release.set()
+
+    release_task = asyncio.create_task(release_from_event_loop())
+    model = app.registry.get("blocking_gen")
+    chunks = [chunk async for chunk in invoke_streaming_model(model, {"n": 1})]
+    await release_task
+
+    assert event_loop_ran.is_set()
+    assert chunks == [True]
+
+
 # ---------------------------------------------------------------------------
 # resolve_deps
 # ---------------------------------------------------------------------------
@@ -118,6 +144,32 @@ async def test_resolve_deps_with_depends() -> None:
     model = app.registry.get("test")
     resolved = await resolve_deps(model, {}, "", "predict.test", app.state)
     assert resolved["val"] == 42
+
+
+async def test_sync_dependency_does_not_block_event_loop() -> None:
+    app = BlazeApp(enable_batching=False)
+    release = threading.Event()
+    event_loop_ran = threading.Event()
+
+    def blocking_dep(ctx: Context) -> bool:
+        return release.wait(timeout=1)
+
+    @app.model("test_blocking_dep")
+    def handler(value: bool = Depends(blocking_dep)) -> bool:
+        return value
+
+    async def release_from_event_loop() -> None:
+        await asyncio.sleep(0.01)
+        event_loop_ran.set()
+        release.set()
+
+    release_task = asyncio.create_task(release_from_event_loop())
+    model = app.registry.get("test_blocking_dep")
+    resolved = await resolve_deps(model, {}, "", "predict.test", app.state)
+    await release_task
+
+    assert event_loop_ran.is_set()
+    assert resolved["value"] is True
 
 
 async def test_resolve_deps_with_no_deps() -> None:
