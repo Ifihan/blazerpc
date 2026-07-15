@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from grpclib.const import Status
 from grpclib.events import RecvRequest, SendTrailingMetadata
+from grpclib.exceptions import GRPCError
 from grpclib.server import Server
 
 from blazerpc.app import BlazeApp
@@ -101,19 +103,12 @@ async def test_metrics_middleware_records() -> None:
     # Simulate a request event
     req_event = MagicMock(spec=RecvRequest)
     req_event.method_name = "/blazerpc.InferenceService/PredictEcho"
-    req_event.metadata = {}  # Use as key
+    req_event.method_func = AsyncMock()
 
     await mw.on_request(req_event)
+    await req_event.method_func(MagicMock())
 
-    # Simulate response event with same metadata object
-    resp_event = MagicMock(spec=SendTrailingMetadata)
-    resp_event.metadata = req_event.metadata
-    resp_event.status = Status.OK
-
-    await mw.on_response(resp_event)
-
-    # Timing entry should be consumed
-    assert len(mw._timings) == 0
+    assert mw._current_request.get() is None
 
 
 @pytest.mark.asyncio
@@ -127,6 +122,46 @@ async def test_metrics_middleware_missing_timing() -> None:
 
     # Should not raise even with no matching request
     await mw.on_response(resp_event)
+
+
+@pytest.mark.asyncio
+async def test_metrics_middleware_correlates_concurrent_errors() -> None:
+    mw = MetricsMiddleware()
+    mw._record = MagicMock()  # type: ignore[method-assign]
+
+    async def explicit_error(_stream: object) -> None:
+        response = MagicMock(spec=SendTrailingMetadata)
+        response.status = Status.PERMISSION_DENIED
+        await mw.on_response(response)
+        await asyncio.sleep(0)
+
+    async def raised_error(_stream: object) -> None:
+        await asyncio.sleep(0)
+        raise GRPCError(Status.INVALID_ARGUMENT)
+
+    first = MagicMock(spec=RecvRequest)
+    first.method_name = "/service/First"
+    first.method_func = explicit_error
+    second = MagicMock(spec=RecvRequest)
+    second.method_name = "/service/Second"
+    second.method_func = raised_error
+    await mw.on_request(first)
+    await mw.on_request(second)
+
+    results = await asyncio.gather(
+        first.method_func(MagicMock()),
+        second.method_func(MagicMock()),
+        return_exceptions=True,
+    )
+
+    assert isinstance(results[1], GRPCError)
+    assert mw._record.call_count == 2
+    recorded = {(item.args[0], item.args[1]) for item in mw._record.call_args_list}
+    assert recorded == {
+        ("/service/First", Status.PERMISSION_DENIED),
+        ("/service/Second", Status.INVALID_ARGUMENT),
+    }
+    assert all(item.args[2] >= 0 for item in mw._record.call_args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -158,18 +193,12 @@ async def test_otel_metrics_middleware_records() -> None:
 
     req_event = MagicMock(spec=RecvRequest)
     req_event.method_name = "/blazerpc.InferenceService/PredictEcho"
-    req_event.metadata = {}
+    req_event.method_func = AsyncMock()
 
     await mw.on_request(req_event)
+    await req_event.method_func(MagicMock())
 
-    resp_event = MagicMock(spec=SendTrailingMetadata)
-    resp_event.metadata = req_event.metadata
-    resp_event.status = Status.OK
-
-    await mw.on_response(resp_event)
-
-    # Timing entry should be consumed
-    assert len(mw._timings) == 0
+    assert mw._current_request.get() is None
 
 
 @pytest.mark.asyncio
@@ -206,15 +235,16 @@ async def test_otel_metrics_middleware_custom_meter() -> None:
     # Verify instruments are used on request/response
     req_event = MagicMock(spec=RecvRequest)
     req_event.method_name = "/blazerpc.InferenceService/PredictEcho"
-    req_event.metadata = {}
+    req_event.method_func = AsyncMock()
 
     await mw.on_request(req_event)
+    await req_event.method_func(MagicMock())
 
-    resp_event = MagicMock(spec=SendTrailingMetadata)
-    resp_event.metadata = req_event.metadata
-    resp_event.status = Status.OK
-
-    await mw.on_response(resp_event)
-
-    mw._request_count.add.assert_called_once()
+    mw._request_count.add.assert_called_once_with(
+        1,
+        {"method": "/blazerpc.InferenceService/PredictEcho", "status": "0"},
+    )
     mw._request_duration.record.assert_called_once()
+    duration, attributes = mw._request_duration.record.call_args.args
+    assert duration >= 0
+    assert attributes == {"method": "/blazerpc.InferenceService/PredictEcho"}

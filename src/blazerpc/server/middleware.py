@@ -15,12 +15,17 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
+from dataclasses import dataclass
 
+from grpclib.const import Status
 from grpclib.events import RecvRequest, SendTrailingMetadata, listen
-from grpclib.server import Server
+from grpclib.exceptions import GRPCError
+from grpclib.server import Server, Stream
 from opentelemetry import metrics as otel_metrics
 from prometheus_client import Counter, Histogram
 
@@ -101,7 +106,60 @@ _REQUEST_DURATION = Histogram(
 )
 
 
-class MetricsMiddleware(Middleware):
+@dataclass
+class _RequestTiming:
+    method: str
+    start: float
+    status: Status | None = None
+
+
+class _MetricsLifecycle(Middleware):
+    def __init__(self) -> None:
+        self._current_request: ContextVar[_RequestTiming | None] = ContextVar(
+            f"{type(self).__name__}_current_request", default=None
+        )
+
+    async def on_request(self, event: RecvRequest) -> None:
+        timing = _RequestTiming(event.method_name, time.perf_counter())
+        method_func = event.method_func
+
+        async def wrapped_method(stream: Stream) -> None:
+            token = self._current_request.set(timing)
+            try:
+                await method_func(stream)
+            except GRPCError as exc:
+                timing.status = timing.status or exc.status
+                raise
+            except asyncio.CancelledError:
+                timing.status = timing.status or Status.CANCELLED
+                raise
+            except Exception:
+                timing.status = timing.status or Status.UNKNOWN
+                raise
+            finally:
+                try:
+                    status = timing.status or Status.OK
+                    self._record(
+                        timing.method,
+                        status,
+                        time.perf_counter() - timing.start,
+                    )
+                finally:
+                    self._current_request.reset(token)
+
+        event.method_func = wrapped_method
+
+    async def on_response(self, event: SendTrailingMetadata) -> None:
+        timing = self._current_request.get()
+        if timing is not None:
+            timing.status = event.status
+
+    @abstractmethod
+    def _record(self, method: str, status: Status, duration: float) -> None:
+        """Record metrics for one completed RPC."""
+
+
+class MetricsMiddleware(_MetricsLifecycle):
     """Collects Prometheus metrics for every RPC call.
 
     Exported metrics:
@@ -111,21 +169,10 @@ class MetricsMiddleware(Middleware):
     """
 
     def __init__(self) -> None:
-        self._timings: dict[int, tuple[str, float]] = {}
+        super().__init__()
 
-    async def on_request(self, event: RecvRequest) -> None:
-        key = id(event.metadata)
-        self._timings[key] = (event.method_name, time.perf_counter())
-
-    async def on_response(self, event: SendTrailingMetadata) -> None:
-        key = id(event.metadata)
-        entry = self._timings.pop(key, None)
-        if entry is None:
-            return
-        method, start = entry
-        duration = time.perf_counter() - start
-        status_str = str(event.status.value) if event.status else "0"
-        _REQUEST_COUNT.labels(method=method, status=status_str).inc()
+    def _record(self, method: str, status: Status, duration: float) -> None:
+        _REQUEST_COUNT.labels(method=method, status=str(status.value)).inc()
         _REQUEST_DURATION.labels(method=method).observe(duration)
 
 
@@ -134,7 +181,7 @@ class MetricsMiddleware(Middleware):
 # ---------------------------------------------------------------------------
 
 
-class OTelMetricsMiddleware(Middleware):
+class OTelMetricsMiddleware(_MetricsLifecycle):
     """Pushes RPC metrics via the OpenTelemetry Metrics API.
 
     Exported instruments:
@@ -148,7 +195,7 @@ class OTelMetricsMiddleware(Middleware):
     """
 
     def __init__(self, meter: otel_metrics.Meter | None = None) -> None:
-        self._timings: dict[int, tuple[str, float]] = {}
+        super().__init__()
         if meter is None:
             m = otel_metrics.get_meter("blazerpc")
         else:
@@ -163,19 +210,8 @@ class OTelMetricsMiddleware(Middleware):
             description="RPC request duration in seconds",
         )
 
-    async def on_request(self, event: RecvRequest) -> None:
-        key = id(event.metadata)
-        self._timings[key] = (event.method_name, time.perf_counter())
-
-    async def on_response(self, event: SendTrailingMetadata) -> None:
-        key = id(event.metadata)
-        entry = self._timings.pop(key, None)
-        if entry is None:
-            return
-        method, start = entry
-        duration = time.perf_counter() - start
-        status_str = str(event.status.value) if event.status else "0"
-        self._request_count.add(1, {"method": method, "status": status_str})
+    def _record(self, method: str, status: Status, duration: float) -> None:
+        self._request_count.add(1, {"method": method, "status": str(status.value)})
         self._request_duration.record(duration, {"method": method})
 
 
