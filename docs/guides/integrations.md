@@ -15,17 +15,24 @@ uv add "blazerpc[pytorch]"
 The `@torch_model` decorator converts NumPy inputs to PyTorch tensors before your function runs, and converts the PyTorch tensor output back to NumPy when it returns:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from blazerpc import BlazeApp, TensorInput, TensorOutput
 from blazerpc.contrib.pytorch import torch_model
 
 app = BlazeApp()
 
+ImageShape = tuple[
+    Literal["batch"], Literal[3], Literal[224], Literal[224]
+]
+ScoresShape = tuple[Literal["batch"], Literal[1000]]
+
 @app.model("classifier")
 @torch_model(device="cuda")
 def classify(
-    image: TensorInput[np.float32, "batch", 3, 224, 224],
-) -> TensorOutput[np.float32, "batch", 1000]:
+    image: TensorInput[np.float32, ImageShape],
+) -> TensorOutput[np.float32, ScoresShape]:
     # `image` is a torch.Tensor on CUDA
     return model(image)
     # Return value is converted back to np.ndarray automatically
@@ -70,17 +77,24 @@ uv add "blazerpc[tensorflow]"
 Works the same way as `@torch_model`, converting NumPy inputs to TensorFlow tensors and back:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from blazerpc import BlazeApp, TensorInput, TensorOutput
 from blazerpc.contrib.tensorflow import tf_model
 
 app = BlazeApp()
 
+ImageShape = tuple[
+    Literal["batch"], Literal[224], Literal[224], Literal[3]
+]
+ScoresShape = tuple[Literal["batch"], Literal[1000]]
+
 @app.model("classifier")
 @tf_model
 def classify(
-    image: TensorInput[np.float32, "batch", 224, 224, 3],
-) -> TensorOutput[np.float32, "batch", 1000]:
+    image: TensorInput[np.float32, ImageShape],
+) -> TensorOutput[np.float32, ScoresShape]:
     # `image` is a tf.Tensor
     return model(image)
 ```
@@ -111,6 +125,8 @@ uv add "blazerpc[onnx]"
 `ONNXModel` manages an ONNX Runtime inference session and exposes a simple `predict()` method:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from blazerpc import BlazeApp, TensorInput, TensorOutput
 from blazerpc.contrib.onnx import ONNXModel
@@ -122,10 +138,15 @@ onnx_model = ONNXModel(
 
 app = BlazeApp()
 
+ImageShape = tuple[
+    Literal["batch"], Literal[3], Literal[224], Literal[224]
+]
+ScoresShape = tuple[Literal["batch"], Literal[1000]]
+
 @app.model("classifier")
 def classify(
-    image: TensorInput[np.float32, "batch", 3, 224, 224],
-) -> TensorOutput[np.float32, "batch", 1000]:
+    image: TensorInput[np.float32, ImageShape],
+) -> TensorOutput[np.float32, ScoresShape]:
     return onnx_model.predict(image)[0]
 ```
 

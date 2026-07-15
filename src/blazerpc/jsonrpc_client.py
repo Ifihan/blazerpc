@@ -63,51 +63,75 @@ class JsonRpcClient:
     # Public API
     # ------------------------------------------------------------------
 
-    async def predict(
-        self, model_name: str, model_version: str = "1", **kwargs: Any
-    ) -> Any:
+    async def predict(self, endpoint: str | None = None, /, **kwargs: Any) -> Any:
         """Make a unary JSON-RPC prediction call.
 
         Numpy arrays in *kwargs* are auto-converted to tensor dicts.
         Tensor dicts in the response are auto-converted back to numpy arrays.
         """
-        model = self._get_model(model_name, model_version)
+        model_name = _resolve_model_name(endpoint, kwargs)
+        return await self.predict_version(model_name, "1", **kwargs)
+
+    async def predict_version(
+        self, model_name: str, version: str, /, **kwargs: Any
+    ) -> Any:
+        """Make a unary call to an explicit model version."""
+        model = self._get_model(model_name, version)
         params = _prepare_params(kwargs, model)
         payload = {
             "jsonrpc": "2.0",
-            "method": jsonrpc_method("predict", model_name, model_version),
+            "method": jsonrpc_method("predict", model_name, version),
             "params": params,
             "id": self._next_id(),
         }
 
         session = await self._ensure_session()
         async with session.post(self._url, json=payload) as resp:
-            resp.raise_for_status()
-            body = await resp.json()
+            try:
+                body = await resp.json()
+            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                resp.raise_for_status()
+                raise
 
-        if "error" in body:
-            err = body["error"]
-            raise BlazeRPCError(f"JSON-RPC error {err['code']}: {err['message']}")
+            if "error" in body:
+                _raise_rpc_error(body["error"])
+            resp.raise_for_status()
 
         return _restore_result(
             body.get("result"), model.output_type if model is not None else None
         )
 
     async def stream(
-        self, model_name: str, model_version: str = "1", **kwargs: Any
+        self, endpoint: str | None = None, /, **kwargs: Any
     ) -> AsyncIterator[Any]:
         """Make a streaming call via the SSE endpoint.
 
         Yields each chunk's result value.
         """
-        model = self._get_model(model_name, model_version)
+        model_name = _resolve_model_name(endpoint, kwargs)
+        async for item in self.stream_version(model_name, "1", **kwargs):
+            yield item
+
+    async def stream_version(
+        self, model_name: str, version: str, /, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        """Make a streaming call to an explicit model version."""
+        model = self._get_model(model_name, version)
         params = _prepare_params(kwargs, model)
         payload = {"params": params}
-        method = jsonrpc_method("stream", model_name, model_version)
+        method = jsonrpc_method("stream", model_name, version)
         url = f"{self._url}/stream/{method.removeprefix('stream.')}"
 
         session = await self._ensure_session()
         async with session.post(url, json=payload) as resp:
+            if resp.status >= 400:
+                try:
+                    body = await resp.json()
+                except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                    resp.raise_for_status()
+                    raise
+                if "error" in body:
+                    _raise_rpc_error(body["error"], prefix="Stream error")
             resp.raise_for_status()
             buffer = b""
             async for chunk in resp.content.iter_any():
@@ -120,7 +144,7 @@ class JsonRpcClient:
                     if event_type == "done":
                         return
                     if event_type == "error":
-                        raise BlazeRPCError(f"Stream error: {data_str}")
+                        _raise_rpc_error(json.loads(data_str), prefix="Stream error")
                     if data_str:
                         yield _restore_result(
                             json.loads(data_str),
@@ -130,7 +154,7 @@ class JsonRpcClient:
             if buffer:
                 event_type, data_str = _parse_sse_event(buffer)
                 if event_type == "error":
-                    raise BlazeRPCError(f"Stream error: {data_str}")
+                    _raise_rpc_error(json.loads(data_str), prefix="Stream error")
                 if event_type != "done" and data_str:
                     yield _restore_result(
                         json.loads(data_str),
@@ -221,3 +245,25 @@ def _restore_result(value: Any, type_hint: Any = None) -> Any:
             tensor_from_json(item) if is_tensor_json(item) else item for item in value
         ]
     return value
+
+
+def _raise_rpc_error(error: Any, *, prefix: str = "JSON-RPC error") -> None:
+    """Raise a transport error while retaining structured RPC details."""
+    if isinstance(error, dict):
+        if "error" in error:
+            _raise_rpc_error(error["error"], prefix=prefix)
+        code = error.get("code")
+        message = error.get("message", error)
+        if code is not None:
+            raise BlazeRPCError(f"{prefix} {code}: {message}")
+        raise BlazeRPCError(f"{prefix}: {message}")
+    raise BlazeRPCError(f"{prefix}: {error}")
+
+
+def _resolve_model_name(endpoint: str | None, kwargs: dict[str, Any]) -> str:
+    """Resolve a positional endpoint while preserving the legacy keyword form."""
+    if endpoint is None:
+        endpoint = kwargs.pop("model_name", None)
+    if not isinstance(endpoint, str) or not endpoint:
+        raise TypeError("model_name must be provided as a non-empty string")
+    return endpoint

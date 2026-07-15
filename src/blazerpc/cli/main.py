@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import typer
 
+from blazerpc.cli._asyncio import run as run_async
 from blazerpc.cli.reload import run_with_reload
 from blazerpc.cli.proto import export_proto
 from blazerpc.cli.serve import load_app
@@ -74,14 +74,6 @@ def serve(
 
     blaze_app = load_app(app_path)
 
-    # Install uvloop when available for better performance.
-    try:
-        import uvloop
-
-        uvloop.install()
-    except ImportError:
-        pass
-
     # Print startup banner.
     models = blaze_app.registry.list_models()
     typer.echo("")
@@ -93,16 +85,16 @@ def serve(
     if transport == "grpc":
         typer.echo(f"  ✓ gRPC listening on {host}:{port}")
         typer.echo("")
-        asyncio.run(blaze_app.serve(host, port))
+        run_async(blaze_app.serve(host, port))
     elif transport == "jsonrpc":
         typer.echo(f"  ✓ JSON-RPC listening on {host}:{http_port}")
         typer.echo("")
-        asyncio.run(blaze_app.serve_jsonrpc(host, http_port))
+        run_async(blaze_app.serve_jsonrpc(host, http_port))
     elif transport == "both":
         typer.echo(f"  ✓ gRPC listening on {host}:{port}")
         typer.echo(f"  ✓ JSON-RPC listening on {host}:{http_port}")
         typer.echo("")
-        asyncio.run(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
+        run_async(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
 
 
 @app.command()

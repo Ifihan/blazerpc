@@ -13,7 +13,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Coroutine
 
 log = logging.getLogger("blazerpc.batcher")
 
@@ -68,6 +68,7 @@ class Batcher:
         self._running = False
         self._accepting = True
         self._task: asyncio.Task[None] | None = None
+        self._stop_task: asyncio.Task[None] | None = None
         self._pending: dict[asyncio.Future[Any], BatchItem] = {}
 
     async def submit(self, request: Any) -> Any:
@@ -88,6 +89,7 @@ class Batcher:
             return await future
         except asyncio.CancelledError:
             future.cancel()
+            self._remove_queued(item)
             item.request = None
             raise
         finally:
@@ -104,24 +106,49 @@ class Batcher:
         """
         if self._running:
             return
+        if self._stop_task is not None and not self._stop_task.done():
+            await asyncio.shield(self._stop_task)
+            if self._running:
+                return
+        self._stop_task = None
         self._accepting = True
         self._running = True
         self._task = asyncio.create_task(self._process_loop(inference_fn))
 
-    async def stop(self) -> None:
+    def stop(self) -> Coroutine[Any, Any, None]:
         """Stop the batching loop and cancel all unresolved submissions."""
+        self._accepting = False
+        self._running = False
+        stop_task = self._stop_task
+        if stop_task is None:
+            stop_task = asyncio.create_task(self._stop())
+            self._stop_task = stop_task
+        return self._wait_for_stop(stop_task)
+
+    async def _wait_for_stop(self, stop_task: asyncio.Task[None]) -> None:
+        try:
+            await asyncio.shield(stop_task)
+        except asyncio.CancelledError:
+            # Keep cleanup alive, but do not turn cancellation into success.
+            await asyncio.shield(stop_task)
+            raise
+
+    async def _stop(self) -> None:
         self._accepting = False
         self._running = False
         for future, item in list(self._pending.items()):
             item.request = None
             future.cancel()
-        if self._task is not None:
-            self._task.cancel()
+        self._pending.clear()
+        task = self._task
+        if task is not None:
+            task.cancel()
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+            if self._task is task:
+                self._task = None
         while not self.queue.empty():
             item = self.queue.get_nowait()
             item.request = None
@@ -129,6 +156,16 @@ class Batcher:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _remove_queued(self, item: BatchItem) -> None:
+        """Remove an item from the queue without changing live-item order."""
+        retained: list[BatchItem] = []
+        for _ in range(self.queue.qsize()):
+            queued = self.queue.get_nowait()
+            if queued is not item:
+                retained.append(queued)
+        for queued in retained:
+            self.queue.put_nowait(queued)
 
     async def _collect_batch(self) -> list[BatchItem]:
         """Collect items up to *max_size* or until *timeout* expires."""

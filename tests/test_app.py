@@ -169,7 +169,7 @@ def test_unsupported_return_annotation_is_rejected() -> None:
         app.registry.register("bad_output", "1", model)
 
 
-def test_protobuf_keyword_parameter_is_rejected() -> None:
+def test_protobuf_keyword_parameter_is_accepted() -> None:
     app = BlazeApp(enable_batching=False)
 
     def model(value: str) -> str:
@@ -180,28 +180,57 @@ def test_protobuf_keyword_parameter_is_rejected() -> None:
         [inspect.Parameter("string", inspect.Parameter.POSITIONAL_OR_KEYWORD)],
         return_annotation=str,
     )
-    with pytest.raises(ValidationError, match="valid Protobuf field name"):
-        app.registry.register("keyword_field", "1", model)
+    app.registry.register("keyword_field", "1", model)
+    assert app.registry.get("keyword_field").input_types == {"string": str}
 
 
-def test_streaming_declaration_requires_generator_function() -> None:
+@pytest.mark.parametrize(
+    "kind",
+    [
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.VAR_POSITIONAL,
+        inspect.Parameter.VAR_KEYWORD,
+    ],
+)
+def test_unsupported_model_parameter_kinds_are_rejected(
+    kind: inspect._ParameterKind,
+) -> None:
     app = BlazeApp(enable_batching=False)
 
-    with pytest.raises(ValidationError, match="generator or async generator"):
+    def model(value: str) -> str:
+        return value
 
-        @app.model("not_a_stream", streaming=True)
-        def model(value: str) -> str:
-            return value
+    model.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [inspect.Parameter("value", kind, annotation=str)],
+        return_annotation=str,
+    )
+    with pytest.raises(ValidationError, match="explicit keyword parameter"):
+        app.registry.register("unsupported_parameter", "1", model)
 
 
-def test_generator_function_requires_streaming_declaration() -> None:
+def test_streaming_factory_is_accepted_without_generator_syntax() -> None:
     app = BlazeApp(enable_batching=False)
 
+    @app.model("stream", streaming=True)
+    def model(value: str) -> list[str]:
+        return [value]
+
+    assert app.registry.get("stream").func is model
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_known_generator_requires_streaming_declaration(asynchronous: bool) -> None:
+    app = BlazeApp(enable_batching=False)
+
+    def sync_model(value: str) -> str:
+        yield value
+
+    async def async_model(value: str) -> str:
+        yield value
+
+    model = async_model if asynchronous else sync_model
     with pytest.raises(ValidationError, match="must be declared streaming"):
-
-        @app.model("undeclared_stream")
-        def model(value: str) -> str:
-            yield value
+        app.registry.register("undeclared_stream", "1", model)
 
 
 def test_app_accepts_middleware() -> None:

@@ -18,6 +18,7 @@ app = BlazeApp(name="jsonrpc-example", enable_batching=False)
 
 # -- Simple echo model -------------------------------------------------------
 
+
 @app.model("echo")
 def echo(text: str) -> str:
     """Return the input text prefixed with 'Echo:'."""
@@ -25,6 +26,7 @@ def echo(text: str) -> str:
 
 
 # -- Math model ---------------------------------------------------------------
+
 
 @app.model("add")
 def add(a: float, b: float) -> float:
@@ -48,6 +50,7 @@ def greet(name: str, secret: str = Depends(get_secret)) -> str:
 
 
 # -- Streaming model ----------------------------------------------------------
+
 
 @app.model("words", streaming=True)
 async def words(sentence: str) -> str:

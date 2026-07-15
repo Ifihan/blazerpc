@@ -40,7 +40,7 @@ async def test_client_predict_echo() -> None:
 
     try:
         async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
-            result = await client.predict("echo", text="hello")
+            result = await client.predict(model_name="echo", text="hello")
             assert result == "Echo: hello"
     finally:
         server.close()
@@ -82,6 +82,14 @@ async def test_client_routes_multiple_model_versions() -> None:
     def echo_v2(text: str) -> str:
         return f"v2:{text}"
 
+    @app.model("tokens", streaming=True)
+    async def tokens_v1(text: str) -> str:
+        yield f"v1:{text}"
+
+    @app.model("tokens", version="2", streaming=True)
+    async def tokens_v2(text: str) -> str:
+        yield f"v2:{text}"
+
     servicer = build_servicer(app.registry)
     server = Server([servicer], codec=RawCodec())
     await server.start("127.0.0.1", 0)
@@ -90,8 +98,37 @@ async def test_client_routes_multiple_model_versions() -> None:
     try:
         async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             assert await client.predict("echo", text="one") == "v1:one"
+            assert await client.predict_version("echo", "2", text="two") == "v2:two"
+            assert [chunk async for chunk in client.stream("tokens", text="one")] == [
+                "v1:one"
+            ]
+            assert [
+                chunk
+                async for chunk in client.stream_version("tokens", "2", text="two")
+            ] == ["v2:two"]
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_client_preserves_model_version_request_field() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("describe")
+    def describe(model_version: str) -> str:
+        return f"model:{model_version}"
+
+    servicer = build_servicer(app.registry)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    try:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             assert (
-                await client.predict("echo", model_version="2", text="two") == "v2:two"
+                await client.predict("describe", model_version="canary")
+                == "model:canary"
             )
     finally:
         server.close()

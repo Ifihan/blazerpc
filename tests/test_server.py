@@ -113,20 +113,58 @@ async def test_grpc_server_cleans_partial_server_and_preserves_failure(
 @pytest.mark.asyncio
 async def test_grpc_stop_is_idempotent_during_concurrent_calls() -> None:
     calls = 0
+    closing = asyncio.Event()
+    closed = asyncio.Event()
 
     class UnderlyingServer:
         def close(self) -> None:
             nonlocal calls
             calls += 1
+            closing.set()
 
         async def wait_closed(self) -> None:
-            await asyncio.sleep(0)
+            await closed.wait()
 
     _, server = _make_server()
     server._server = UnderlyingServer()  # type: ignore[assignment]
-    await asyncio.gather(server.stop(), server.stop(), server.stop())
+    stops = [asyncio.create_task(server.stop()) for _ in range(3)]
+    await closing.wait()
 
     assert calls == 1
+    assert not any(stop.done() for stop in stops)
+
+    closed.set()
+    await asyncio.gather(*stops)
+    assert all(stop.done() for stop in stops)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_stop_waiter_does_not_cancel_shared_cleanup() -> None:
+    closed = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    class UnderlyingServer:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            await closed.wait()
+            cleanup_finished.set()
+
+    _, server = _make_server()
+    server._server = UnderlyingServer()  # type: ignore[assignment]
+    cancelled_waiter = asyncio.create_task(server.stop())
+    completing_waiter = asyncio.create_task(server.stop())
+    await asyncio.sleep(0)
+
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+    assert not completing_waiter.done()
+
+    closed.set()
+    await completing_waiter
+    assert cleanup_finished.is_set()
 
 
 @pytest.mark.asyncio

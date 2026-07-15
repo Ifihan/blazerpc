@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import signal
@@ -44,7 +45,7 @@ def _log_cleanup_error(message: str, error: BaseException) -> None:
 
 def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
     """Create an inference function that combines tensor requests on axis zero."""
-    is_async = asyncio.iscoroutinefunction(model.func)
+    is_async = inspect.iscoroutinefunction(model.func)
 
     async def inference_fn(batch: list[dict[str, Any]]) -> list[Any]:
         batch_sizes: list[int] = []
@@ -239,8 +240,7 @@ class BlazeApp:
                 self.registry, batchers=batchers, app_state=self.state
             )
             health = build_health_service([servicer])
-            reflection_handlers = build_reflection_service([servicer])
-            handlers = [servicer, health, *reflection_handlers]
+            handlers = build_reflection_service([servicer, health])
             server = GRPCServer(handlers, middleware=self.middleware)
             servers.append(server)
             await server.start(host, port)
@@ -317,8 +317,7 @@ class BlazeApp:
                 self.registry, batchers=batchers, app_state=self.state
             )
             health = build_health_service([servicer])
-            reflection_handlers = build_reflection_service([servicer])
-            handlers = [servicer, health, *reflection_handlers]
+            handlers = build_reflection_service([servicer, health])
             grpc_server = GRPCServer(handlers, middleware=self.middleware)
             servers.append(grpc_server)
 

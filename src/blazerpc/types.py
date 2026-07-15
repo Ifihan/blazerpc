@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, get_args, get_origin
 
 import numpy as np
 
@@ -64,22 +65,57 @@ def validate_tensor_type(type_hint: _TensorType) -> None:
             raise ValueError("Tensor shape symbols must not be empty")
 
 
-class TensorInput(Generic[DType, Shape]):
-    """Type annotation for tensor inputs with shape info."""
+def _shape_dimensions(annotation: Any) -> tuple[Any, ...]:
+    if get_origin(annotation) is not tuple:
+        return (annotation,)
+    dimensions: list[Any] = []
+    for dimension in get_args(annotation):
+        if get_origin(dimension) is Literal:
+            dimensions.extend(get_args(dimension))
+        else:
+            dimensions.append(dimension)
+    return tuple(dimensions)
 
-    @classmethod
-    def __class_getitem__(cls, params: tuple[Any, ...]) -> _TensorType:
-        dtype, *shape = params
-        return _TensorType(dtype, tuple(shape), is_input=True)
 
+if TYPE_CHECKING:
+    # Static form: TensorInput[dtype, tuple[Literal[dim], ...]]. At runtime the
+    # compatibility classes below also accept the original variadic syntax.
+    class _ShapedArray(np.ndarray[Any, np.dtype[Any]], Generic[Shape]):
+        pass
 
-class TensorOutput(Generic[DType, Shape]):
-    """Type annotation for tensor outputs with shape info."""
+    TensorInput: TypeAlias = np.ndarray[Any, np.dtype[DType]] | _ShapedArray[Shape]
+    TensorOutput: TypeAlias = np.ndarray[Any, np.dtype[DType]] | _ShapedArray[Shape]
+else:
 
-    @classmethod
-    def __class_getitem__(cls, params: tuple[Any, ...]) -> _TensorType:
-        dtype, *shape = params
-        return _TensorType(dtype, tuple(shape), is_input=False)
+    class TensorInput(Generic[DType, Shape]):
+        """Tensor input annotation.
+
+        Type-checked code should pass shape dimensions as a tuple of
+        ``Literal`` values. The original variadic shape form remains supported
+        at runtime for compatibility.
+        """
+
+        @classmethod
+        def __class_getitem__(cls, params: tuple[Any, ...]) -> _TensorType:
+            dtype, *shape = params
+            if len(shape) == 1:
+                shape = list(_shape_dimensions(shape[0]))
+            return _TensorType(dtype, tuple(shape), is_input=True)
+
+    class TensorOutput(Generic[DType, Shape]):
+        """Tensor output annotation.
+
+        Type-checked code should pass shape dimensions as a tuple of
+        ``Literal`` values. The original variadic shape form remains supported
+        at runtime for compatibility.
+        """
+
+        @classmethod
+        def __class_getitem__(cls, params: tuple[Any, ...]) -> _TensorType:
+            dtype, *shape = params
+            if len(shape) == 1:
+                shape = list(_shape_dimensions(shape[0]))
+            return _TensorType(dtype, tuple(shape), is_input=False)
 
 
 def extract_type_info(func: Callable[..., Any]) -> dict[str, Any]:
@@ -97,7 +133,10 @@ def extract_type_info(func: Callable[..., Any]) -> dict[str, Any]:
     """
     from blazerpc.context import Context, Depends  # local import avoids circular
 
-    hints = inspect.get_annotations(func, eval_str=True)
+    annotation_target: Any = func
+    if not (inspect.isfunction(func) or inspect.ismethod(func)):
+        annotation_target = getattr(func, "__call__")
+    hints = inspect.get_annotations(annotation_target, eval_str=True)
     sig = inspect.signature(func)
 
     inputs: dict[str, Any] = {}

@@ -14,40 +14,6 @@ from blazerpc.types import _TensorType, extract_type_info, validate_tensor_type
 _VERSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _MODEL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _PROTO_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_PROTO_KEYWORDS = {
-    "bool",
-    "bytes",
-    "double",
-    "enum",
-    "fixed32",
-    "fixed64",
-    "float",
-    "import",
-    "int32",
-    "int64",
-    "map",
-    "message",
-    "oneof",
-    "option",
-    "package",
-    "public",
-    "repeated",
-    "reserved",
-    "returns",
-    "rpc",
-    "service",
-    "sfixed32",
-    "sfixed64",
-    "sint32",
-    "sint64",
-    "stream",
-    "string",
-    "syntax",
-    "to",
-    "uint32",
-    "uint64",
-    "weak",
-}
 
 
 def model_key(name: str, version: str = "1") -> str:
@@ -122,6 +88,16 @@ class ModelRegistry:
                 )
 
         type_info = extract_type_info(func)
+        for param in inspect.signature(func).parameters.values():
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                raise ValidationError(
+                    f"Parameter {param.name!r} must be an explicit keyword parameter",
+                    field=param.name,
+                )
         if type_info["output"] is type(None):
             type_info["output"] = None
         tensor_types = [
@@ -135,10 +111,7 @@ class ModelRegistry:
             except ValueError as exc:
                 raise ValidationError(str(exc), field=name) from exc
         for param_name, annotation in type_info["inputs"].items():
-            if (
-                not _PROTO_IDENTIFIER_RE.fullmatch(param_name)
-                or param_name in _PROTO_KEYWORDS
-            ):
+            if not _PROTO_IDENTIFIER_RE.fullmatch(param_name):
                 raise ValidationError(
                     f"Parameter name {param_name!r} is not a valid Protobuf field name",
                     field=param_name,
@@ -153,19 +126,14 @@ class ModelRegistry:
             except TypeError as exc:
                 raise ValidationError(str(exc), field="return") from exc
 
-        is_generator = inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(
-            func
-        )
-        if streaming and not is_generator:
-            raise ValidationError(
-                "Streaming models must be generator or async generator functions",
-                field=name,
-            )
-        if not streaming and is_generator:
+        if not streaming and (
+            inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)
+        ):
             raise ValidationError(
                 "Generator and async generator functions must be declared streaming",
                 field=name,
             )
+
         total_params = (
             len(type_info["inputs"])
             + len(type_info["deps"])

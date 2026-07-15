@@ -25,6 +25,8 @@ This example trains a scikit-learn Logistic Regression classifier on the [Iris d
 Create a file called `app.py`:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
@@ -40,8 +42,8 @@ app = BlazeApp()
 
 @app.model("iris")
 def predict_iris(
-    features: TensorInput[np.float32, "batch", 4],
-) -> TensorOutput[np.float32, "batch", 3]:
+    features: TensorInput[np.float32, tuple[Literal["batch"], Literal[4]]],
+) -> TensorOutput[np.float32, tuple[Literal["batch"], Literal[3]]]:
     """Classify iris flowers. Returns class probabilities."""
     probs = clf.predict_proba(features).astype(np.float32)
     return probs
@@ -177,20 +179,27 @@ See the [JSON-RPC guide](guides/jsonrpc.md) for batch requests, streaming, and a
 Register as many models as you need on the same app. Each model becomes its own RPC method:
 
 ```python
+from typing import Literal
+
 from sklearn.linear_model import LinearRegression, LogisticRegression
+
+IrisInputShape = tuple[Literal["batch"], Literal[4]]
+IrisOutputShape = tuple[Literal["batch"], Literal[3]]
+HousingInputShape = tuple[Literal["batch"], Literal[3]]
+HousingOutputShape = tuple[Literal["batch"], Literal[1]]
 
 # Iris classifier
 @app.model("iris")
 def predict_iris(
-    features: TensorInput[np.float32, "batch", 4],
-) -> TensorOutput[np.float32, "batch", 3]:
+    features: TensorInput[np.float32, IrisInputShape],
+) -> TensorOutput[np.float32, IrisOutputShape]:
     return iris_clf.predict_proba(features).astype(np.float32)
 
 # Linear regression
 @app.model("housing")
 def predict_housing(
-    features: TensorInput[np.float32, "batch", 3],
-) -> TensorOutput[np.float32, "batch", 1]:
+    features: TensorInput[np.float32, HousingInputShape],
+) -> TensorOutput[np.float32, HousingOutputShape]:
     return reg.predict(features).astype(np.float32).reshape(-1, 1)
 
 # Simple echo for health checks

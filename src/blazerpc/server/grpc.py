@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Coroutine, Sequence
 
 from grpclib.encoding.base import CodecBase
 from grpclib.server import Server
@@ -61,6 +61,7 @@ class GRPCServer:
         self._middleware = list(middleware or [])
         self._grace_period = grace_period
         self._server: Server | None = None
+        self._stop_task: asyncio.Task[None] | None = None
         self._shutdown_event: asyncio.Event = asyncio.Event()
 
     async def start(
@@ -76,6 +77,9 @@ class GRPCServer:
         installed_signals: list[signal.Signals] = []
         failure: BaseException | None = None
         try:
+            if self._stop_task is not None:
+                await asyncio.shield(self._stop_task)
+                self._stop_task = None
             self._server = Server(self._handlers, codec=RawCodec())
             for mw in self._middleware:
                 mw.attach(self._server)
@@ -107,13 +111,22 @@ class GRPCServer:
                     raise
                 log.exception("Cleanup failed after gRPC server failure")
 
-    async def stop(self) -> None:
+    def stop(self) -> Coroutine[Any, Any, None]:
         """Gracefully shut down the server."""
         self._shutdown_event.set()
-        server = self._server
-        if server is None:
-            return
-        self._server = None
+        if self._stop_task is None:
+            server = self._server
+            if server is None:
+                return self._wait_for_stop(None)
+            self._server = None
+            self._stop_task = asyncio.create_task(self._stop(server))
+        return self._wait_for_stop(self._stop_task)
+
+    async def _wait_for_stop(self, stop_task: asyncio.Task[None] | None) -> None:
+        if stop_task is not None:
+            await asyncio.shield(stop_task)
+
+    async def _stop(self, server: Server) -> None:
         log.info("Shutting down (grace period %.1fs)…", self._grace_period)
         server.close()
         try:

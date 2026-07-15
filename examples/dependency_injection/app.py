@@ -15,6 +15,8 @@ Run the server:
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
@@ -65,9 +67,9 @@ def get_auth_token(ctx: Context) -> str | None:
 
 @app.model("classify")
 def classify(
-    features: TensorInput[np.float32, 4],
+    features: TensorInput[np.float32, tuple[Literal[4]]],
     model: LogisticRegression = Depends(get_classifier),
-) -> TensorOutput[np.float32, 3]:
+) -> TensorOutput[np.float32, tuple[Literal[3]]]:
     """Classify iris features using an injected model."""
     features_2d = features.reshape(1, -1) if features.ndim == 1 else features
     return model.predict_proba(features_2d).astype(np.float32)
@@ -84,7 +86,7 @@ def whoami(
 
 @app.model("label")
 def label(
-    features: TensorInput[np.float32, 4],
+    features: TensorInput[np.float32, tuple[Literal[4]]],
     model: LogisticRegression = Depends(get_classifier),
     names: list[str] = Depends(get_class_names),
 ) -> str:

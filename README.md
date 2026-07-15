@@ -39,6 +39,8 @@ uv add "blazerpc[all]"          # All optional integrations
 This example trains a scikit-learn classifier on the Iris dataset and serves it over gRPC. Create a file called `app.py`:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
@@ -54,8 +56,8 @@ app = BlazeApp()
 
 @app.model("iris")
 def predict_iris(
-    features: TensorInput[np.float32, "batch", 4],
-) -> TensorOutput[np.float32, "batch", 3]:
+    features: TensorInput[np.float32, tuple[Literal["batch"], Literal[4]]],
+) -> TensorOutput[np.float32, tuple[Literal["batch"], Literal[3]]]:
     """Classify iris flowers. Returns class probabilities."""
     probs = clf.predict_proba(features).astype(np.float32)
     return probs
@@ -149,20 +151,32 @@ The batching layer handles:
 For models that operate on NumPy arrays, use `TensorInput` and `TensorOutput` to declare the expected shape and dtype:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from blazerpc import BlazeApp, TensorInput, TensorOutput
+
+ImageShape = tuple[
+    Literal["batch"], Literal[224], Literal[224], Literal[3]
+]
+ScoresShape = tuple[Literal["batch"], Literal[1000]]
 
 app = BlazeApp()
 
 @app.model("classify")
 def classify(
-    image: TensorInput[np.float32, "batch", 224, 224, 3],
-) -> TensorOutput[np.float32, "batch", 1000]:
+    image: TensorInput[np.float32, ImageShape],
+) -> TensorOutput[np.float32, ScoresShape]:
     # image is serialized as a TensorProto on the wire
     return model.predict(image)
 ```
 
 The generated proto uses a `TensorProto` message with `shape`, `dtype`, and raw `bytes` fields for zero-copy serialization.
+
+For static type checking on Python 3.10+, pass the shape as a fixed-length
+`tuple` whose dimensions are `Literal` values, as shown above. The legacy
+variadic form, such as `TensorInput[np.float32, "batch", 224, 224, 3]`, remains
+accepted at runtime but is not a statically valid generic annotation.
 
 ## Framework integrations
 

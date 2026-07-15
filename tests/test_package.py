@@ -36,7 +36,7 @@ print(blazerpc.__version__)
     result = subprocess.run(
         [sys.executable, "-c", script], check=True, capture_output=True, text=True
     )
-    assert result.stdout.strip() == blazerpc.__version__
+    assert result.stdout.strip() == "0+unknown"
 
 
 def test_base_install_exports_without_aiohttp() -> None:

@@ -51,6 +51,11 @@ For example, version `"2"` uses `PredictSentimentV2`, `SentimentV2Request`, and
 `predict.sentiment.v2`. Registering the same model name and version twice is an
 error; different versions may coexist.
 
+`BlazeClient.predict()` and `BlazeClient.stream()` always call version `"1"` and
+reserve all keyword arguments for model input fields. Use
+`predict_version(model_name, version, **kwargs)` or
+`stream_version(model_name, version, **kwargs)` to call another version.
+
 ## `JsonRpcServer` constructor
 
 These parameters control the JSON-RPC HTTP server. Set internally by `BlazeApp.serve_jsonrpc()` and `BlazeApp.serve_both()`.

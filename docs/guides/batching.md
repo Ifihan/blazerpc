@@ -46,6 +46,8 @@ This means:
 This example serves a scikit-learn Iris classifier with batching enabled. When multiple clients send classification requests within a short time window, BlazeRPC automatically groups them into a single batch:
 
 ```python
+from typing import Literal
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
@@ -64,8 +66,8 @@ app = BlazeApp(
 
 @app.model("iris")
 def predict_iris(
-    features: TensorInput[np.float32, "batch", 4],
-) -> TensorOutput[np.float32, "batch", 3]:
+    features: TensorInput[np.float32, tuple[Literal["batch"], Literal[4]]],
+) -> TensorOutput[np.float32, tuple[Literal["batch"], Literal[3]]]:
     probs = clf.predict_proba(features).astype(np.float32)
     return probs
 ```

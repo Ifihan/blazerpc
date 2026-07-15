@@ -169,25 +169,31 @@ async with BlazeClient("127.0.0.1", 50051, registry=app.registry) as client:
 | `port`     | `int`                   | `50051`       | Server port.                                                                |
 | `registry` | `ModelRegistry \| None` | `None`        | Model registry used to build Protobuf message classes. Required for `predict` and `stream`. Pass `app.registry`. |
 
-### `await client.predict(model_name, model_version="1", **kwargs)`
+### `await client.predict(model_name, **kwargs)`
 
-Make a unary prediction call. Returns the model's result value, deserialized from the Protobuf response.
-
-| Parameter    | Type  | Description                                    |
-| ------------ | ----- | ---------------------------------------------- |
-| `model_name` | `str` | The registered model name.                     |
-| `version`    | `str` | Model version. Version `"1"` preserves the unversioned wire path. |
-| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
-
-### `async for chunk in client.stream(model_name, model_version="1", **kwargs)`
-
-Make a server-streaming call. Yields each chunk's result value, deserialized from Protobuf.
+Make a unary prediction call to model version `"1"`. Returns the model's result value, deserialized from the Protobuf response. All keyword arguments are model input fields.
 
 | Parameter    | Type  | Description                                    |
 | ------------ | ----- | ---------------------------------------------- |
 | `model_name` | `str` | The registered model name.                     |
-| `version`    | `str` | Model version.                                 |
 | `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
+
+### `await client.predict_version(model_name, model_version, **kwargs)`
+
+Make a unary prediction call to an explicit model version. `model_version` is positional so model input fields, including a field named `model_version`, remain available through `**kwargs`.
+
+### `async for chunk in client.stream(model_name, **kwargs)`
+
+Make a server-streaming call to model version `"1"`. Yields each chunk's result value, deserialized from Protobuf.
+
+| Parameter    | Type  | Description                                    |
+| ------------ | ----- | ---------------------------------------------- |
+| `model_name` | `str` | The registered model name.                     |
+| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
+
+### `async for chunk in client.stream_version(model_name, model_version, **kwargs)`
+
+Make a server-streaming call to an explicit model version.
 
 ### `client.close()`
 
@@ -197,7 +203,7 @@ Close the underlying gRPC channel. Also called automatically when using the asyn
 
 ## `blazerpc.JsonRpcClient`
 
-Async JSON-RPC 2.0 client for calling BlazeRPC model endpoints over HTTP. Unlike `BlazeClient`, no `registry` parameter is needed — JSON is self-describing.
+Async JSON-RPC 2.0 client for calling BlazeRPC model endpoints over HTTP. A registry is optional and enables local tensor contract validation.
 
 ```python
 from blazerpc import JsonRpcClient
@@ -213,29 +219,36 @@ Requires `aiohttp`: `pip install blazerpc[jsonrpc]`.
 
 ### Constructor
 
-| Parameter | Type  | Default  | Description                          |
-| --------- | ----- | -------- | ------------------------------------ |
-| `url`     | `str` | required | JSON-RPC endpoint URL (e.g. `"http://localhost:8080/jsonrpc"`). |
+| Parameter  | Type                    | Default  | Description                          |
+| ---------- | ----------------------- | -------- | ------------------------------------ |
+| `url`      | `str`                   | required | JSON-RPC endpoint URL (e.g. `"http://localhost:8080/jsonrpc"`). |
+| `registry` | `ModelRegistry \| None` | `None`   | Optional registry for local tensor validation. |
 
-### `await client.predict(model_name, model_version="1", **kwargs)`
+### `await client.predict(model_name, **kwargs)`
 
-Make a unary JSON-RPC prediction call. NumPy arrays in kwargs are auto-converted to base64 tensor dicts. Tensor dicts in the response are auto-converted back to NumPy arrays.
-
-| Parameter    | Type  | Description                                    |
-| ------------ | ----- | ---------------------------------------------- |
-| `model_name` | `str` | The registered model name.                     |
-| `version`    | `str` | Model version; non-v1 calls use `.v<version>` method suffixes. |
-| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
-
-### `async for chunk in client.stream(model_name, model_version="1", **kwargs)`
-
-Make a streaming call via the SSE endpoint. Yields each chunk's result value.
+Make a unary JSON-RPC prediction call to model version `"1"`. NumPy arrays in kwargs are auto-converted to base64 tensor dicts. Tensor dicts in the response are auto-converted back to NumPy arrays.
 
 | Parameter    | Type  | Description                                    |
 | ------------ | ----- | ---------------------------------------------- |
 | `model_name` | `str` | The registered model name.                     |
-| `version`    | `str` | Model version.                                 |
 | `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
+
+### `await client.predict_version(model_name, version, **kwargs)`
+
+Make a unary call to an explicit model version. Routing arguments are positional, so model fields named `model_name` or `version` remain available in `**kwargs`.
+
+### `async for chunk in client.stream(model_name, **kwargs)`
+
+Make a streaming call to model version `"1"` via the SSE endpoint. Yields each chunk's result value.
+
+| Parameter    | Type  | Description                                    |
+| ------------ | ----- | ---------------------------------------------- |
+| `model_name` | `str` | The registered model name.                     |
+| `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
+
+### `async for chunk in client.stream_version(model_name, version, **kwargs)`
+
+Make a streaming call to an explicit model version.
 
 ### `client.close()`
 
@@ -280,24 +293,39 @@ await server.start(host="0.0.0.0", port=8080)
 Type annotation for tensor-typed model inputs. Used by the codegen layer to emit `TensorProto` fields.
 
 ```python
+from typing import Literal
+
 from blazerpc import TensorInput
 import numpy as np
 
-def classify(image: TensorInput[np.float32, "batch", 224, 224, 3]) -> ...:
+ImageShape = tuple[
+    Literal["batch"], Literal[224], Literal[224], Literal[3]
+]
+
+def classify(image: TensorInput[np.float32, ImageShape]) -> ...:
     ...
 ```
 
-The subscript arguments are `dtype` followed by shape dimensions. Shape dimensions can be integers or strings (symbolic names like `"batch"`).
+The subscript arguments are the `dtype` and a fixed-length shape tuple. Each
+shape dimension is a `Literal` integer or string (for symbolic names such as
+`"batch"`). This form is compatible with static type checkers on Python 3.10+.
+The legacy variadic runtime syntax, such as
+`TensorInput[np.float32, "batch", 224, 224, 3]`, remains accepted, but it is not
+a statically valid generic annotation.
 
 ## `blazerpc.TensorOutput`
 
 Type annotation for tensor-typed model outputs. Same subscript syntax as `TensorInput`.
 
 ```python
+from typing import Literal
+
 from blazerpc import TensorOutput
 import numpy as np
 
-def classify(...) -> TensorOutput[np.float32, "batch", 1000]:
+ScoresShape = tuple[Literal["batch"], Literal[1000]]
+
+def classify(...) -> TensorOutput[np.float32, ScoresShape]:
     ...
 ```
 
@@ -395,7 +423,7 @@ Create a gRPC health service. Pass servicer instances for per-service health tra
 
 ### `build_reflection_service(handlers=None) -> list`
 
-Create gRPC reflection handlers. Pass gRPC service handler objects (e.g. the servicer from `build_servicer()`) so clients can discover available RPCs.
+Create a complete gRPC handler list with reflection enabled. Pass every service handler that will be installed (including health) and use the returned list directly so all services are advertised exactly once.
 
 ---
 

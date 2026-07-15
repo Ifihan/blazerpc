@@ -205,6 +205,48 @@ async def test_cancelled_queued_request_is_not_processed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_queued_request_releases_capacity_and_preserves_fifo() -> None:
+    inference_started = asyncio.Event()
+    release_inference = asyncio.Event()
+    processed: list[int] = []
+    batcher = Batcher(max_size=1, timeout_ms=0, max_queue_size=3)
+
+    async def inference_fn(batch: list) -> list:
+        value = batch[0]["x"]
+        processed.append(value)
+        if value == 1:
+            inference_started.set()
+            await release_inference.wait()
+        return [value]
+
+    await batcher.start(inference_fn)
+    first = asyncio.create_task(batcher.submit({"x": 1}))
+    await inference_started.wait()
+    queued = [asyncio.create_task(batcher.submit({"x": value})) for value in (2, 3, 4)]
+    await asyncio.sleep(0)
+    assert batcher.queue.full()
+
+    queued[1].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued[1]
+    assert not batcher.queue.full()
+
+    replacement = asyncio.create_task(batcher.submit({"x": 5}))
+    await asyncio.sleep(0)
+    assert batcher.queue.full()
+    release_inference.set()
+
+    assert await asyncio.gather(first, queued[0], queued[2], replacement) == [
+        1,
+        2,
+        4,
+        5,
+    ]
+    assert processed == [1, 2, 4, 5]
+    await batcher.stop()
+
+
+@pytest.mark.asyncio
 async def test_stop_cancels_in_flight_and_queued_requests() -> None:
     inference_started = asyncio.Event()
     inference_cancelled = asyncio.Event()
@@ -231,6 +273,129 @@ async def test_stop_cancels_in_flight_and_queued_requests() -> None:
     assert all(isinstance(result, asyncio.CancelledError) for result in results)
     assert inference_cancelled.is_set()
     assert batcher.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stop_caller_waits_for_cleanup_then_propagates() -> None:
+    inference_started = asyncio.Event()
+    inference_cancelled = asyncio.Event()
+    finish_cancellation = asyncio.Event()
+    batcher = Batcher(max_size=1, timeout_ms=0)
+
+    async def inference_fn(batch: list) -> list:
+        inference_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            inference_cancelled.set()
+            await finish_cancellation.wait()
+            raise
+
+    await batcher.start(inference_fn)
+    submission = asyncio.create_task(batcher.submit({"x": 1}))
+    await inference_started.wait()
+    stopping = asyncio.create_task(batcher.stop())
+    await inference_cancelled.wait()
+
+    stopping.cancel()
+    await asyncio.sleep(0)
+    assert not stopping.done()
+    finish_cancellation.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+    with pytest.raises(asyncio.CancelledError):
+        await submission
+    assert batcher._task is None
+    assert not batcher._pending
+    assert batcher.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_stop_callers_complete_together() -> None:
+    inference_started = asyncio.Event()
+    inference_cancelled = asyncio.Event()
+    finish_cancellation = asyncio.Event()
+    batcher = Batcher(max_size=1, timeout_ms=0)
+
+    async def inference_fn(batch: list) -> list:
+        inference_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            inference_cancelled.set()
+            await finish_cancellation.wait()
+            raise
+
+    await batcher.start(inference_fn)
+    submission = asyncio.create_task(batcher.submit({"x": 1}))
+    await inference_started.wait()
+    stops = [asyncio.create_task(batcher.stop()) for _ in range(2)]
+    await inference_cancelled.wait()
+    await asyncio.sleep(0)
+    assert not any(stop.done() for stop in stops)
+
+    finish_cancellation.set()
+    await asyncio.gather(*stops)
+    with pytest.raises(asyncio.CancelledError):
+        await submission
+    assert batcher._task is None
+    assert batcher.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_batcher_restart_waits_for_stop_cleanup() -> None:
+    inference_started = asyncio.Event()
+    inference_cancelled = asyncio.Event()
+    finish_cancellation = asyncio.Event()
+    batcher = Batcher(max_size=1, timeout_ms=0)
+
+    async def first_fn(batch: list) -> list:
+        inference_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            inference_cancelled.set()
+            await finish_cancellation.wait()
+            raise
+
+    async def second_fn(batch: list) -> list:
+        return [item["x"] * 2 for item in batch]
+
+    await batcher.start(first_fn)
+    submission = asyncio.create_task(batcher.submit({"x": 2}))
+    await inference_started.wait()
+    stopping = asyncio.create_task(batcher.stop())
+    await inference_cancelled.wait()
+    restarting = asyncio.create_task(batcher.start(second_fn))
+    await asyncio.sleep(0)
+    assert not restarting.done()
+
+    finish_cancellation.set()
+    await asyncio.gather(stopping, restarting)
+    with pytest.raises(asyncio.CancelledError):
+        await submission
+    assert await batcher.submit({"x": 2}) == 4
+    await batcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_immediately_after_scheduling_stop_restarts_batcher() -> None:
+    batcher = Batcher(max_size=1, timeout_ms=0)
+
+    async def first_fn(batch: list) -> list:
+        return [item["x"] for item in batch]
+
+    async def second_fn(batch: list) -> list:
+        return [item["x"] * 2 for item in batch]
+
+    await batcher.start(first_fn)
+    stopping = asyncio.create_task(batcher.stop())
+    await batcher.start(second_fn)
+    await stopping
+
+    assert await batcher.submit({"x": 3}) == 6
+    await batcher.stop()
 
 
 @pytest.mark.parametrize(

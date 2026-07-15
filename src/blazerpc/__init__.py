@@ -1,9 +1,7 @@
 """BlazeRPC - A lightweight, framework-agnostic RPC library for ML inference."""
 
-import re
 from importlib.metadata import PackageNotFoundError, version
 from importlib.util import find_spec
-from pathlib import Path
 
 from blazerpc.app import BlazeApp
 from blazerpc.client import BlazeClient
@@ -21,16 +19,7 @@ from blazerpc.types import TensorInput, TensorOutput
 try:
     __version__ = version("blazerpc")
 except PackageNotFoundError:
-    # Distribution metadata is absent when importing directly from a checkout.
-    pyproject = Path(__file__).parents[2] / "pyproject.toml"
-    match = re.search(
-        r'^\[project\].*?^version\s*=\s*"([^"]+)"',
-        pyproject.read_text(encoding="utf-8"),
-        re.MULTILINE | re.DOTALL,
-    )
-    if match is None:
-        raise RuntimeError("Unable to determine BlazeRPC version from pyproject.toml")
-    __version__ = match.group(1)
+    __version__ = "0+unknown"
 
 try:
     _has_aiohttp = find_spec("aiohttp") is not None

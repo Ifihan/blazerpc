@@ -58,10 +58,8 @@ class BlazeClient:
             self._channel.close()
             self._channel = None
 
-    async def predict(
-        self, model_name: str, model_version: str = "1", **kwargs: Any
-    ) -> Any:
-        """Make a unary prediction call to a model.
+    async def predict(self, endpoint: str | None = None, /, **kwargs: Any) -> Any:
+        """Make a unary prediction call to version 1 of a model.
 
         Parameters
         ----------
@@ -74,6 +72,13 @@ class BlazeClient:
         -------
         The model's return value, unwrapped from the Protobuf response.
         """
+        model_name = _resolve_model_name(endpoint, kwargs)
+        return await self.predict_version(model_name, "1", **kwargs)
+
+    async def predict_version(
+        self, model_name: str, model_version: str, /, **kwargs: Any
+    ) -> Any:
+        """Make a unary prediction call to an explicit model version."""
         channel = self._ensure_channel()
         path = _build_path(model_name, model_version)
         model = self._get_model(model_name, model_version)
@@ -90,9 +95,9 @@ class BlazeClient:
         return _decode_result(response_msg.result, model)
 
     async def stream(
-        self, model_name: str, model_version: str = "1", **kwargs: Any
+        self, endpoint: str | None = None, /, **kwargs: Any
     ) -> AsyncIterator[Any]:
-        """Make a server-streaming call to a model.
+        """Make a server-streaming call to version 1 of a model.
 
         Parameters
         ----------
@@ -105,6 +110,14 @@ class BlazeClient:
         ------
         Each chunk's unwrapped result value.
         """
+        model_name = _resolve_model_name(endpoint, kwargs)
+        async for result in self.stream_version(model_name, "1", **kwargs):
+            yield result
+
+    async def stream_version(
+        self, model_name: str, model_version: str, /, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        """Make a server-streaming call to an explicit model version."""
         channel = self._ensure_channel()
         path = _build_path(model_name, model_version)
         model = self._get_model(model_name, model_version)
@@ -180,3 +193,12 @@ def _decode_result(result: Any, model: ModelInfo) -> Any:
 def _build_path(model_name: str, version: str = "1") -> str:
     """Build the gRPC method path for a model name."""
     return f"/{SERVICE_NAME}/{_rpc_name_for(model_name, version)}"
+
+
+def _resolve_model_name(endpoint: str | None, kwargs: dict[str, Any]) -> str:
+    """Resolve a positional endpoint while preserving the legacy keyword form."""
+    if endpoint is None:
+        endpoint = kwargs.pop("model_name", None)
+    if not isinstance(endpoint, str) or not endpoint:
+        raise TypeError("model_name must be provided as a non-empty string")
+    return endpoint

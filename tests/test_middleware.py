@@ -34,7 +34,7 @@ def test_middleware_is_abstract() -> None:
         Middleware()  # type: ignore[abstract]
 
 
-def test_middleware_attach_registers_listeners() -> None:
+async def test_middleware_attach_registers_listeners() -> None:
     """attach() should register event listeners on the server."""
     app = BlazeApp(enable_batching=False)
 

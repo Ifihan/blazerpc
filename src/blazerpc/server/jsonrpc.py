@@ -12,7 +12,7 @@ import logging
 import signal
 import time
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Coroutine, Sequence
 
 try:
     from aiohttp import web
@@ -45,6 +45,7 @@ class JsonRpcServer:
         self._middleware = list(middleware or [])
         self._grace_period = grace_period
         self._runner: web.AppRunner | None = None
+        self._stop_task: asyncio.Task[None] | None = None
         self._shutdown_event: asyncio.Event = asyncio.Event()
 
     async def start(
@@ -55,7 +56,11 @@ class JsonRpcServer:
         handle_signals: bool = True,
     ) -> None:
         """Start serving and block until shutdown is requested."""
+        prior_stop = self._stop_task
+        if prior_stop is not None:
+            await asyncio.shield(prior_stop)
         self._shutdown_event.clear()
+        self._stop_task = None
         app = web.Application()
         app.router.add_post("/jsonrpc", self._handle_jsonrpc)
         app.router.add_post("/jsonrpc/stream/{method:.+}", self._handle_sse)
@@ -97,18 +102,24 @@ class JsonRpcServer:
                     raise
                 log.exception("Cleanup failed after JSON-RPC server failure")
 
-    async def stop(self) -> None:
+    def stop(self) -> Coroutine[Any, Any, None]:
         """Gracefully shut down the server."""
         self._shutdown_event.set()
-        runner = self._runner
-        if runner is None:
-            return
-        self._runner = None
-        log.info("Shutting down JSON-RPC server (grace %.1fs)…", self._grace_period)
-        try:
-            await asyncio.wait_for(runner.cleanup(), timeout=self._grace_period)
-        except asyncio.TimeoutError:
-            log.warning("JSON-RPC grace period expired, forcing shutdown")
+        if self._stop_task is None:
+            runner = self._runner
+            if runner is None:
+                return self._wait_for_stop(None)
+            self._runner = None
+            log.info("Shutting down JSON-RPC server (grace %.1fs)…", self._grace_period)
+            self._stop_task = asyncio.create_task(runner.cleanup())
+
+        return self._wait_for_stop(self._stop_task)
+
+    async def _wait_for_stop(self, stop_task: asyncio.Task[None] | None) -> None:
+        # AppRunner already applies shutdown_timeout. Shield its cleanup so an
+        # outer timeout or one cancelled caller cannot interrupt every waiter.
+        if stop_task is not None:
+            await asyncio.shield(stop_task)
 
     def _signal_shutdown(self) -> None:
         log.info("Received shutdown signal")
@@ -126,24 +137,32 @@ class JsonRpcServer:
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            await self._run_middleware_response("", 200, time.monotonic() - start)
-            return web.json_response(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": "Parse error"},
-                    "id": None,
-                },
-                status=200,
-            )
+            status = 200
+            entered: list[TransportMiddleware] = []
+            try:
+                denial = await self._run_middleware_request("", peer, headers, entered)
+                if denial is None:
+                    parse_result = self._jsonrpc_error(None, -32700, "Parse error")
+                else:
+                    status, message = denial
+                    parse_result = self._jsonrpc_error(None, -32000, message)
+                return web.json_response(parse_result, status=status)
+            except asyncio.CancelledError:
+                status = 499
+                raise
+            finally:
+                await self._run_middleware_response(
+                    "", status, time.monotonic() - start, entered
+                )
 
         # Each batch element has its own middleware lifecycle so method-aware
         # authorization and metrics behave the same as independent requests.
         if isinstance(body, list):
             if not body:
-                result, status = await self._dispatch_jsonrpc(
+                empty_result, status = await self._dispatch_jsonrpc(
                     body, peer=peer, headers=headers
                 )
-                return web.json_response(result, status=status)
+                return web.json_response(empty_result, status=status)
             processed = await asyncio.gather(
                 *(
                     self._dispatch_jsonrpc(item, peer=peer, headers=headers)
@@ -168,16 +187,16 @@ class JsonRpcServer:
         lifecycle_method = f"stream.{method}"
         start = time.monotonic()
 
-        denial = await self._run_middleware_request(lifecycle_method, peer, headers)
-        if denial is not None:
-            status, message = denial
-            await self._run_middleware_response(
-                lifecycle_method, status, time.monotonic() - start
-            )
-            return web.json_response({"error": message}, status=status)
-
         status = 500
+        entered: list[TransportMiddleware] = []
         try:
+            denial = await self._run_middleware_request(
+                lifecycle_method, peer, headers, entered
+            )
+            if denial is not None:
+                status, message = denial
+                return web.json_response({"error": message}, status=status)
+
             try:
                 body = await request.json()
             except json.JSONDecodeError:
@@ -192,7 +211,7 @@ class JsonRpcServer:
 
             params = body.get("params", {})
             try:
-                self._dispatcher.validate_streaming(lifecycle_method, params)
+                prepared = self._dispatcher.prepare_streaming(lifecycle_method, params)
             except ModelNotFoundError as exc:
                 status = 404
                 return web.json_response({"error": str(exc)}, status=status)
@@ -212,7 +231,11 @@ class JsonRpcServer:
             status = 200
             try:
                 async for chunk in self._dispatcher.handle_streaming(
-                    lifecycle_method, params, peer=peer, headers=headers
+                    lifecycle_method,
+                    params,
+                    peer=peer,
+                    headers=headers,
+                    prepared=prepared,
                 ):
                     data = json.dumps(chunk)
                     await response.write(f"data: {data}\n\n".encode())
@@ -225,25 +248,37 @@ class JsonRpcServer:
             await response.write(b"event: done\ndata: {}\n\n")
             await response.write_eof()
             return response
+        except asyncio.CancelledError:
+            status = 499
+            raise
         finally:
             await self._run_middleware_response(
-                lifecycle_method, status, time.monotonic() - start
+                lifecycle_method, status, time.monotonic() - start, entered
             )
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         """Handle GET /health."""
         method = "health"
         start = time.monotonic()
-        denial = await self._run_middleware_request(
-            method, request.remote or "", dict(request.headers)
-        )
-        if denial is not None:
-            status, message = denial
-            result = {"error": message}
-        else:
-            status = 200
-            result = {"status": "ok"}
-        await self._run_middleware_response(method, status, time.monotonic() - start)
+        status = 500
+        entered: list[TransportMiddleware] = []
+        try:
+            denial = await self._run_middleware_request(
+                method, request.remote or "", dict(request.headers), entered
+            )
+            if denial is not None:
+                status, message = denial
+                result = {"error": message}
+            else:
+                status = 200
+                result = {"status": "ok"}
+        except asyncio.CancelledError:
+            status = 499
+            raise
+        finally:
+            await self._run_middleware_response(
+                method, status, time.monotonic() - start, entered
+            )
         return web.json_response(result, status=status)
 
     # ------------------------------------------------------------------
@@ -260,32 +295,34 @@ class JsonRpcServer:
         method = body.get("method", "") if isinstance(body, dict) else ""
         request_id = body.get("id") if isinstance(body, dict) else None
         start = time.monotonic()
-        denial = await self._run_middleware_request(method, peer, headers)
-        if denial is not None:
-            status, message = denial
-            result = (
-                None
-                if self._is_notification(body)
-                else self._jsonrpc_error(request_id, -32000, message)
-            )
-        else:
-            try:
-                result = await self._dispatcher.handle(body, peer=peer, headers=headers)
-                status = 204 if result is None else 200
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("Unhandled JSON-RPC error for method %s", method)
-                status = 500
+        status = 500
+        entered: list[TransportMiddleware] = []
+        try:
+            denial = await self._run_middleware_request(method, peer, headers, entered)
+            if denial is not None:
+                status, message = denial
                 result = (
                     None
                     if self._is_notification(body)
-                    else self._jsonrpc_error(
-                        request_id, -32603, "Internal server error"
-                    )
+                    else self._jsonrpc_error(request_id, -32000, message)
                 )
-
-        await self._run_middleware_response(method, status, time.monotonic() - start)
+            else:
+                result = await self._dispatcher.handle(body, peer=peer, headers=headers)
+                status = 204 if result is None else 200
+        except asyncio.CancelledError:
+            status = 499
+            raise
+        except Exception:
+            log.exception("Unhandled JSON-RPC error for method %s", method)
+            result = (
+                None
+                if self._is_notification(body)
+                else self._jsonrpc_error(request_id, -32603, "Internal server error")
+            )
+        finally:
+            await self._run_middleware_response(
+                method, status, time.monotonic() - start, entered
+            )
         return result, status
 
     @staticmethod
@@ -298,12 +335,17 @@ class JsonRpcServer:
         )
 
     async def _run_middleware_request(
-        self, method: str, peer: str, headers: dict[str, str]
+        self,
+        method: str,
+        peer: str,
+        headers: dict[str, str],
+        entered: list[TransportMiddleware],
     ) -> tuple[int, str] | None:
         from blazerpc.server.middleware import RequestInfo
 
         info = RequestInfo(method, peer, headers, "jsonrpc")
         for mw in self._middleware:
+            entered.append(mw)
             try:
                 await mw.on_request(info)
             except asyncio.CancelledError:
@@ -322,7 +364,11 @@ class JsonRpcServer:
         return None
 
     async def _run_middleware_response(
-        self, method: str, status: int, duration: float
+        self,
+        method: str,
+        status: int,
+        duration: float,
+        entered: Sequence[TransportMiddleware],
     ) -> None:
         from blazerpc.server.middleware import ResponseInfo
 
@@ -332,7 +378,7 @@ class JsonRpcServer:
             duration=duration,
             transport="jsonrpc",
         )
-        for mw in self._middleware:
+        for mw in reversed(entered):
             try:
                 await mw.on_response(info)
             except Exception:

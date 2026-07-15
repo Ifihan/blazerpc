@@ -123,6 +123,40 @@ async def test_reflection_returns_inference_file_descriptor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reflection_lists_inference_and_health_services_once() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        return text
+
+    servicer = build_servicer(app.registry)
+    health = build_health_service([servicer])
+    handlers = build_reflection_service([servicer, health])
+    mapping_paths = [path for handler in handlers for path in handler.__mapping__()]
+    assert len(mapping_paths) == len(set(mapping_paths))
+
+    server = Server(handlers, codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    channel = Channel("127.0.0.1", _get_server_port(server))
+    try:
+        stub = ServerReflectionStub(channel)
+        async with stub.ServerReflectionInfo.open() as stream:
+            await stream.send_message(
+                ServerReflectionRequest(list_services=""), end=True
+            )
+            response = await stream.recv_message()
+
+        services = [service.name for service in response.list_services_response.service]
+        assert services.count("blazerpc.InferenceService") == 1
+        assert services.count("grpc.health.v1.Health") == 1
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_multiple_models_register() -> None:
     """Multiple models can be registered and produce a working servicer."""
     app = BlazeApp(enable_batching=False)

@@ -182,10 +182,10 @@ class JsonRpcDispatcher:
         *,
         peer: str = "",
         headers: dict[str, str] | None = None,
+        prepared: tuple[ModelInfo, dict[str, Any]] | None = None,
     ) -> AsyncIterator[Any]:
         """Yield chunks from a streaming model for SSE delivery."""
-        model = self.validate_streaming(method, params)
-        kwargs = _decode_json_request(params, model)
+        model, kwargs = prepared or self.prepare_streaming(method, params)
 
         _has_deps = bool(model.dep_params or model.context_params)
         if _has_deps:
@@ -199,6 +199,13 @@ class JsonRpcDispatcher:
 
     def validate_streaming(self, method: str, params: Any) -> ModelInfo:
         """Validate an SSE call without resolving dependencies or invoking a model."""
+        model, _ = self.prepare_streaming(method, params)
+        return model
+
+    def prepare_streaming(
+        self, method: str, params: Any
+    ) -> tuple[ModelInfo, dict[str, Any]]:
+        """Validate and decode an SSE call for a single subsequent invocation."""
         if not isinstance(method, str) or not method.startswith("stream."):
             raise ValidationError("Streaming method must use stream.<model>")
         if not isinstance(params, dict):
@@ -209,8 +216,7 @@ class JsonRpcDispatcher:
             raise ModelNotFoundError(method.removeprefix("stream."), "")
         if not model.streaming:
             raise ValidationError(f"Model '{model.name}' is not streaming")
-        _decode_json_request(params, model)
-        return model
+        return model, _decode_json_request(params, model)
 
     def _resolve_method(self, method: str) -> ModelInfo | None:
         """Resolve an exact versioned method without discarding its version."""

@@ -6,10 +6,11 @@ the server process automatically.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 from typing import Any
+
+from blazerpc.cli._asyncio import run as run_async
 
 log = logging.getLogger("blazerpc.reload")
 
@@ -25,20 +26,13 @@ def _run_server(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    try:
-        import uvloop
-
-        uvloop.install()
-    except ImportError:
-        pass
-
     blaze_app = load_app(app_path)
     if transport == "grpc":
-        asyncio.run(blaze_app.serve(host, port))
+        run_async(blaze_app.serve(host, port))
     elif transport == "jsonrpc":
-        asyncio.run(blaze_app.serve_jsonrpc(host, http_port))
+        run_async(blaze_app.serve_jsonrpc(host, http_port))
     else:
-        asyncio.run(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
+        run_async(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
 
 
 def run_with_reload(

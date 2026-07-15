@@ -24,11 +24,18 @@ Export all models' .proto:
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.linear_model import LinearRegression, LogisticRegression
 
 from blazerpc import BlazeApp, TensorInput, TensorOutput
+
+IrisInputShape = tuple[Literal["batch"], Literal[4]]
+IrisOutputShape = tuple[Literal["batch"], Literal[3]]
+HousingInputShape = tuple[Literal["batch"], Literal[3]]
+HousingOutputShape = tuple[Literal["batch"], Literal[1]]
 
 app = BlazeApp(name="multi-model-demo", enable_batching=False)
 
@@ -42,8 +49,8 @@ iris_clf.fit(iris.data, iris.target)
 
 @app.model("iris")
 def predict_iris(
-    features: TensorInput[np.float32, "batch", 4],
-) -> TensorOutput[np.float32, "batch", 3]:
+    features: TensorInput[np.float32, IrisInputShape],
+) -> TensorOutput[np.float32, IrisOutputShape]:
     """Classify iris flowers. Returns class probabilities."""
     probs = iris_clf.predict_proba(features).astype(np.float32)
     return probs
@@ -61,8 +68,8 @@ reg.fit(X_train, y_train)
 
 @app.model("housing")
 def predict_housing(
-    features: TensorInput[np.float32, "batch", 3],
-) -> TensorOutput[np.float32, "batch", 1]:
+    features: TensorInput[np.float32, HousingInputShape],
+) -> TensorOutput[np.float32, HousingOutputShape]:
     """Predict a value from 3 input features using linear regression."""
     preds = reg.predict(features).astype(np.float32).reshape(-1, 1)
     return preds

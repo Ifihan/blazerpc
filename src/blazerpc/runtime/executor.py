@@ -7,6 +7,7 @@ validation, and error handling.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any, Awaitable, Callable, cast
 
 from blazerpc.exceptions import InferenceError
@@ -23,7 +24,7 @@ class ModelExecutor:
 
     def __init__(self, model: ModelInfo) -> None:
         self._model = model
-        self._is_async = asyncio.iscoroutinefunction(model.func)
+        self._is_async = inspect.iscoroutinefunction(model.func)
 
     @property
     def name(self) -> str:
