@@ -51,20 +51,18 @@ def _type_to_proto_field(py_type: Any) -> tuple[str, bool]:
     origin = get_origin(py_type)
     if origin is list:
         args = get_args(py_type)
-        if args:
-            inner, _ = _type_to_proto_field(args[0])
-            return inner, True
-        return "bytes", True
-
-    # dict[K, V]  →  not directly supported as a field; fall back to bytes
-    if origin is dict:
-        return "bytes", False
+        if len(args) != 1:
+            raise TypeError("List annotations must specify one scalar element type")
+        inner, repeated = _type_to_proto_field(args[0])
+        if repeated or inner == "TensorProto":
+            raise TypeError("Nested lists and repeated tensor fields are not supported")
+        return inner, True
 
     # Plain Python scalars
     if isinstance(py_type, type) and py_type in PYTHON_TYPE_MAP:
         return PYTHON_TYPE_MAP[py_type], False
 
-    return "bytes", False
+    raise TypeError(f"Unsupported Protobuf annotation: {py_type!r}")
 
 
 class ProtoGenerator:

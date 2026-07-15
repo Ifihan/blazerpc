@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+from typing import Any
 
 import numpy as np
 import pytest
@@ -81,6 +83,127 @@ def test_multiple_model_versions_are_registered_separately(app: BlazeApp) -> Non
     assert app.registry.get("echo", "2").func is echo_v2
 
 
+@pytest.mark.parametrize("name", ["", "123model", "-model", "bad.name", "model/name"])
+def test_invalid_generated_model_identifiers_are_rejected(name: str) -> None:
+    app = BlazeApp(enable_batching=False)
+
+    with pytest.raises(ValidationError, match="valid Protobuf identifier"):
+
+        @app.model(name)
+        def model(value: str) -> str:
+            return value
+
+
+def test_invalid_parameter_identifier_is_rejected() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    def model(value: str) -> str:
+        return value
+
+    unicode_name = "na\N{LATIN SMALL LETTER I WITH DIAERESIS}ve"
+    model.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [inspect.Parameter(unicode_name, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
+    model.__annotations__ = {unicode_name: str, "return": str}
+
+    with pytest.raises(ValidationError, match="valid Protobuf field name"):
+        app.registry.register("model", "1", model)
+
+
+def test_sanitized_model_name_collision_is_rejected(app: BlazeApp) -> None:
+    @app.model("foo-bar")
+    def first(value: str) -> str:
+        return value
+
+    with pytest.raises(ValidationError, match="collides.*sanitization"):
+
+        @app.model("foo_bar")
+        def second(value: str) -> str:
+            return value
+
+
+def test_version_derived_model_name_collision_is_rejected(app: BlazeApp) -> None:
+    @app.model("foo-v2")
+    def first(value: str) -> str:
+        return value
+
+    with pytest.raises(ValidationError, match="collides.*sanitization"):
+
+        @app.model("foo", version="2")
+        def second(value: str) -> str:
+            return value
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        Any,
+        object,
+        str | None,
+        dict[str, str],
+        list,
+        list[list[str]],
+        list[TensorInput[np.float32, 1]],
+    ],
+)
+def test_unsupported_input_annotations_are_rejected(annotation: Any) -> None:
+    app = BlazeApp(enable_batching=False)
+
+    def model(value: str) -> str:
+        return value
+
+    model.__annotations__["value"] = annotation
+    with pytest.raises(
+        ValidationError, match="annotation|List annotations|Nested lists"
+    ):
+        app.registry.register("bad_input", "1", model)
+
+
+def test_unsupported_return_annotation_is_rejected() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    def model(value: str) -> object:
+        return value
+
+    with pytest.raises(ValidationError, match="Unsupported Protobuf annotation"):
+        app.registry.register("bad_output", "1", model)
+
+
+def test_protobuf_keyword_parameter_is_rejected() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    def model(value: str) -> str:
+        return value
+
+    model.__annotations__ = {"string": str, "return": str}
+    model.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [inspect.Parameter("string", inspect.Parameter.POSITIONAL_OR_KEYWORD)],
+        return_annotation=str,
+    )
+    with pytest.raises(ValidationError, match="valid Protobuf field name"):
+        app.registry.register("keyword_field", "1", model)
+
+
+def test_streaming_declaration_requires_generator_function() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    with pytest.raises(ValidationError, match="generator or async generator"):
+
+        @app.model("not_a_stream", streaming=True)
+        def model(value: str) -> str:
+            return value
+
+
+def test_generator_function_requires_streaming_declaration() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    with pytest.raises(ValidationError, match="must be declared streaming"):
+
+        @app.model("undeclared_stream")
+        def model(value: str) -> str:
+            yield value
+
+
 def test_app_accepts_middleware() -> None:
     mw = LoggingMiddleware()
     app = BlazeApp(middleware=[mw])
@@ -119,9 +242,7 @@ def test_app_configures_batch_queue_capacity() -> None:
         ({"max_queue_size": 0}, "max_queue_size"),
     ],
 )
-def test_app_rejects_invalid_batch_configuration(
-    kwargs: dict, message: str
-) -> None:
+def test_app_rejects_invalid_batch_configuration(kwargs: dict, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         BlazeApp(**kwargs)
 

@@ -64,7 +64,6 @@ def _field_spec(py_type: Any, field_num: int) -> tuple[Any, Any]:
     - ``_TensorType`` → nested ``TensorProto`` message field
     - ``list[X]``     → repeated scalar field
     - Python scalars  → scalar field
-    - Fallback        → ``bytes_field``
     """
     if isinstance(py_type, _TensorType):
         return _TensorProtoMsg, betterproto.message_field(field_num)
@@ -72,16 +71,17 @@ def _field_spec(py_type: Any, field_num: int) -> tuple[Any, Any]:
     origin = get_origin(py_type)
     if origin is list:
         args = get_args(py_type)
-        inner = args[0] if args else bytes
-        factory = _SCALAR_FIELD.get(inner, betterproto.bytes_field)
-        ann = _LIST_ANNOTATION.get(inner, List[bytes])
+        if len(args) != 1 or args[0] not in _SCALAR_FIELD:
+            raise TypeError(f"Unsupported repeated Protobuf annotation: {py_type!r}")
+        inner = args[0]
+        factory = _SCALAR_FIELD[inner]
+        ann = _LIST_ANNOTATION[inner]
         return ann, factory(field_num)
 
     if isinstance(py_type, type) and py_type in _SCALAR_FIELD:
         return py_type, _SCALAR_FIELD[py_type](field_num)
 
-    # Fallback for dict or unknown types.
-    return bytes, betterproto.bytes_field(field_num)
+    raise TypeError(f"Unsupported Protobuf annotation: {py_type!r}")
 
 
 def build_message_classes(model: ModelInfo) -> tuple[type, type]:

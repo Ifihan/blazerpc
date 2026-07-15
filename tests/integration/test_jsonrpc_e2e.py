@@ -467,7 +467,7 @@ async def test_jsonrpc_param_errors_do_not_invoke_model() -> None:
     calls = 0
 
     @app.model("optional")
-    def optional(required: str, value: str | None = "default") -> str | None:
+    def optional(required: str, value: str = "default") -> str:
         nonlocal calls
         calls += 1
         return value
@@ -495,13 +495,13 @@ async def test_jsonrpc_param_errors_do_not_invoke_model() -> None:
             payload = {
                 "jsonrpc": "2.0",
                 "method": "predict.optional",
-                "params": {"required": "ok", "value": None},
+                "params": {"required": "ok", "value": "valid"},
                 "id": 4,
             }
             async with session.post(url, json=payload) as resp:
                 body = await resp.json()
 
-        assert body["result"] is None
+        assert body["result"] == "valid"
         assert calls == 1
     finally:
         await server.stop()
