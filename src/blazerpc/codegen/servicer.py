@@ -14,6 +14,8 @@ from typing import Any, Callable
 
 import numpy as np
 from grpclib.const import Cardinality, Handler
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 from grpclib.server import Stream
 
 from blazerpc.codegen.invoke import invoke_model, invoke_streaming_model, resolve_deps
@@ -22,6 +24,7 @@ from blazerpc.codegen.proto_types import (
     _TensorProtoMsg,
     build_message_classes,
 )
+from blazerpc.exceptions import SerializationError
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
 from blazerpc.runtime.serialization import deserialize_tensor, serialize_tensor
 from blazerpc.types import _TensorType
@@ -124,7 +127,10 @@ def _make_unary_handler(
 
     async def _handler(stream: Stream[Any, Any]) -> None:
         request_bytes = await stream.recv_message()
-        kwargs = _decode_request(request_bytes, model, request_cls)
+        try:
+            kwargs = _decode_request(request_bytes, model, request_cls)
+        except SerializationError as exc:
+            raise GRPCError(Status.INVALID_ARGUMENT, str(exc)) from exc
 
         if _has_deps:
             dep_kwargs = await resolve_deps(
@@ -134,7 +140,10 @@ def _make_unary_handler(
 
         raw_result = await invoke_model(model, kwargs, batcher=batcher)
 
-        response_bytes = _encode_response(raw_result, model, response_cls)
+        try:
+            response_bytes = _encode_response(raw_result, model, response_cls)
+        except SerializationError as exc:
+            raise GRPCError(Status.INTERNAL, f"Invalid model output: {exc}") from exc
         await stream.send_message(response_bytes)
 
     return _handler
@@ -153,7 +162,10 @@ def _make_streaming_handler(
 
     async def _handler(stream: Stream[Any, Any]) -> None:
         request_bytes = await stream.recv_message()
-        kwargs = _decode_request(request_bytes, model, request_cls)
+        try:
+            kwargs = _decode_request(request_bytes, model, request_cls)
+        except SerializationError as exc:
+            raise GRPCError(Status.INVALID_ARGUMENT, str(exc)) from exc
 
         if _has_deps:
             dep_kwargs = await resolve_deps(
@@ -162,7 +174,10 @@ def _make_streaming_handler(
             kwargs = {**kwargs, **dep_kwargs}
 
         async for chunk in invoke_streaming_model(model, kwargs):
-            response_bytes = _encode_response(chunk, model, response_cls)
+            try:
+                response_bytes = _encode_response(chunk, model, response_cls)
+            except SerializationError as exc:
+                raise GRPCError(Status.INTERNAL, f"Invalid model output: {exc}") from exc
             await stream.send_message(response_bytes)
 
     return _handler
@@ -191,7 +206,7 @@ def _decode_request(raw: Any, model: ModelInfo, request_cls: type) -> dict[str, 
         if isinstance(field_type, _TensorType):
             # Nested TensorProto betterproto message → numpy array
             kwargs[field_name] = deserialize_tensor(
-                _to_serialization_tensor_proto(value)
+                _to_serialization_tensor_proto(value), field_type
             )
         else:
             kwargs[field_name] = value
@@ -208,8 +223,12 @@ def _encode_response(result: Any, model: ModelInfo, response_cls: type) -> bytes
         # No return annotation — emit an empty message.
         return bytes(response_cls())
 
-    if isinstance(result, np.ndarray):
-        tensor_proto = serialize_tensor(result)
+    if isinstance(model.output_type, _TensorType):
+        if not isinstance(result, np.ndarray):
+            raise SerializationError(
+                f"Expected numpy array for tensor output, got {type(result).__name__}"
+            )
+        tensor_proto = serialize_tensor(result, model.output_type)
         tp_msg = _TensorProtoMsg(
             shape=list(tensor_proto.shape),
             dtype=tensor_proto.dtype,

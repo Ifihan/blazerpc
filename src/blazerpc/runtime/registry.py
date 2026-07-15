@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable
 
 from blazerpc.exceptions import ModelNotFoundError, ValidationError
-from blazerpc.types import extract_type_info
+from blazerpc.types import _TensorType, extract_type_info, validate_tensor_type
 
 
 _VERSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -61,6 +61,16 @@ class ModelRegistry:
             )
 
         type_info = extract_type_info(func)
+        tensor_types = [
+            hint
+            for hint in (*type_info["inputs"].values(), type_info["output"])
+            if isinstance(hint, _TensorType)
+        ]
+        for tensor_type in tensor_types:
+            try:
+                validate_tensor_type(tensor_type)
+            except ValueError as exc:
+                raise ValidationError(str(exc), field=name) from exc
         total_params = (
             len(type_info["inputs"])
             + len(type_info["deps"])

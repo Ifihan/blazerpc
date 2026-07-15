@@ -19,8 +19,6 @@ DTYPE_MAP: dict[type, str] = {
     np.uint32: "uint32",
     np.uint64: "uint64",
     np.bool_: "bool",
-    np.bytes_: "bytes",
-    np.str_: "string",
 }
 
 # Mapping from Python scalar types to protobuf type strings.
@@ -48,6 +46,22 @@ class _TensorType:
     def __repr__(self) -> str:
         kind = "TensorInput" if self.is_input else "TensorOutput"
         return f"{kind}[{self.dtype.__name__}, {self.shape}]"
+
+
+def validate_tensor_type(type_hint: _TensorType) -> None:
+    """Validate that a tensor annotation can be represented on the wire."""
+    if type_hint.dtype not in DTYPE_MAP:
+        name = getattr(type_hint.dtype, "__name__", repr(type_hint.dtype))
+        raise ValueError(f"Unsupported tensor annotation dtype: {name}")
+    for dimension in type_hint.shape:
+        if isinstance(dimension, bool) or not isinstance(dimension, (int, str)):
+            raise ValueError(
+                "Tensor shape dimensions must be nonnegative integers or symbols"
+            )
+        if isinstance(dimension, int) and dimension < 0:
+            raise ValueError("Tensor shape dimensions must be nonnegative")
+        if isinstance(dimension, str) and not dimension:
+            raise ValueError("Tensor shape symbols must not be empty")
 
 
 class TensorInput(Generic[DType, Shape]):

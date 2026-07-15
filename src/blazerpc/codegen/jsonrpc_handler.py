@@ -26,6 +26,7 @@ from blazerpc.exceptions import (
 )
 from blazerpc.runtime.json_serialization import json_to_python, tensor_to_json
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
+from blazerpc.types import _TensorType
 
 log = logging.getLogger("blazerpc.jsonrpc")
 
@@ -131,7 +132,10 @@ class JsonRpcDispatcher:
             return _error_response(req_id, INTERNAL_ERROR, str(exc))
 
         # Encode response
-        result = _encode_json_response(raw_result, model)
+        try:
+            result = _encode_json_response(raw_result, model)
+        except SerializationError as exc:
+            return _error_response(req_id, INTERNAL_ERROR, f"Invalid model output: {exc}")
         return _success_response(req_id, result)
 
     # ------------------------------------------------------------------
@@ -238,8 +242,12 @@ def _encode_json_response(result: Any, model: ModelInfo) -> Any:
     if model.output_type is None:
         return None
 
-    if isinstance(result, np.ndarray):
-        return tensor_to_json(result)
+    if isinstance(model.output_type, _TensorType):
+        if not isinstance(result, np.ndarray):
+            raise SerializationError(
+                f"Expected numpy array for tensor output, got {type(result).__name__}"
+            )
+        return tensor_to_json(result, model.output_type)
 
     if isinstance(result, (list, tuple)):
         # Check if elements are numpy arrays

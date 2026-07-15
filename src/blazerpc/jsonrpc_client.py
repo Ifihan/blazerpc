@@ -24,13 +24,16 @@ except ImportError as _exc:
         "Install it with:  pip install blazerpc[jsonrpc]"
     ) from _exc
 
-from blazerpc.exceptions import BlazeRPCError
+from blazerpc.exceptions import BlazeRPCError, SerializationError
 from blazerpc.codegen.jsonrpc_handler import jsonrpc_method
 from blazerpc.runtime.json_serialization import (
     is_tensor_json,
+    python_to_json,
     tensor_from_json,
     tensor_to_json,
 )
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.types import _TensorType
 
 
 class JsonRpcClient:
@@ -40,8 +43,9 @@ class JsonRpcClient:
     a ``registry`` parameter — JSON is self-describing.
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, registry: ModelRegistry | None = None) -> None:
         self._url = url.rstrip("/")
+        self._registry = registry
         self._session: aiohttp.ClientSession | None = None
         self._req_id = 0
 
@@ -66,7 +70,8 @@ class JsonRpcClient:
         Numpy arrays in *kwargs* are auto-converted to tensor dicts.
         Tensor dicts in the response are auto-converted back to numpy arrays.
         """
-        params = _prepare_params(kwargs)
+        model = self._get_model(model_name, model_version)
+        params = _prepare_params(kwargs, model)
         payload = {
             "jsonrpc": "2.0",
             "method": jsonrpc_method("predict", model_name, model_version),
@@ -82,7 +87,9 @@ class JsonRpcClient:
             err = body["error"]
             raise BlazeRPCError(f"JSON-RPC error {err['code']}: {err['message']}")
 
-        return _restore_result(body.get("result"))
+        return _restore_result(
+            body.get("result"), model.output_type if model is not None else None
+        )
 
     async def stream(
         self, model_name: str, model_version: str = "1", **kwargs: Any
@@ -91,7 +98,8 @@ class JsonRpcClient:
 
         Yields each chunk's result value.
         """
-        params = _prepare_params(kwargs)
+        model = self._get_model(model_name, model_version)
+        params = _prepare_params(kwargs, model)
         payload = {"params": params}
         method = jsonrpc_method("stream", model_name, model_version)
         url = f"{self._url}/stream/{method.removeprefix('stream.')}"
@@ -118,13 +126,21 @@ class JsonRpcClient:
                     if event_type == "error":
                         raise BlazeRPCError(f"Stream error: {data_str}")
                     if data_str:
-                        yield _restore_result(json.loads(data_str))
+                        yield _restore_result(
+                            json.loads(data_str),
+                            model.output_type if model is not None else None,
+                        )
 
     async def close(self) -> None:
         """Close the underlying HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    def _get_model(self, name: str, version: str) -> ModelInfo | None:
+        if self._registry is None:
+            return None
+        return self._registry.get(name, version)
 
     async def __aenter__(self) -> "JsonRpcClient":
         await self._ensure_session()
@@ -139,19 +155,36 @@ class JsonRpcClient:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_params(kwargs: dict[str, Any]) -> dict[str, Any]:
+def _prepare_params(
+    kwargs: dict[str, Any], model: ModelInfo | None = None
+) -> dict[str, Any]:
     """Auto-convert numpy arrays in kwargs to tensor JSON dicts."""
     result: dict[str, Any] = {}
     for key, value in kwargs.items():
-        if isinstance(value, np.ndarray):
+        type_hint = model.input_types.get(key) if model is not None else None
+        if isinstance(type_hint, _TensorType):
+            result[key] = python_to_json(value, type_hint)
+        elif isinstance(value, np.ndarray):
             result[key] = tensor_to_json(value)
         else:
             result[key] = value
+    if model is not None:
+        for key, type_hint in model.input_types.items():
+            if isinstance(type_hint, _TensorType) and key not in kwargs:
+                raise SerializationError(
+                    f"Missing tensor input '{key}' for model '{model.name}'"
+                )
     return result
 
 
-def _restore_result(value: Any) -> Any:
+def _restore_result(value: Any, type_hint: Any = None) -> Any:
     """Auto-convert tensor dicts in the response back to numpy arrays."""
+    if isinstance(type_hint, _TensorType):
+        if not isinstance(value, dict):
+            raise SerializationError(
+                f"Expected tensor dict for tensor output, got {type(value).__name__}"
+            )
+        return tensor_from_json(value, type_hint)
     if is_tensor_json(value):
         return tensor_from_json(value)
     if isinstance(value, list):
