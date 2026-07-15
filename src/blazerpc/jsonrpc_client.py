@@ -12,6 +12,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator
 
 import numpy as np
@@ -81,6 +82,7 @@ class JsonRpcClient:
 
         session = await self._ensure_session()
         async with session.post(self._url, json=payload) as resp:
+            resp.raise_for_status()
             body = await resp.json()
 
         if "error" in body:
@@ -106,20 +108,14 @@ class JsonRpcClient:
 
         session = await self._ensure_session()
         async with session.post(url, json=payload) as resp:
+            resp.raise_for_status()
             buffer = b""
             async for chunk in resp.content.iter_any():
                 buffer += chunk
-                while b"\n\n" in buffer:
-                    event_data, buffer = buffer.split(b"\n\n", 1)
-                    lines = event_data.decode().strip().split("\n")
-
-                    event_type = ""
-                    data_str = ""
-                    for line in lines:
-                        if line.startswith("event: "):
-                            event_type = line[7:]
-                        elif line.startswith("data: "):
-                            data_str = line[6:]
+                while separator := _sse_separator(buffer):
+                    index, length = separator
+                    event_data, buffer = buffer[:index], buffer[index + length :]
+                    event_type, data_str = _parse_sse_event(event_data)
 
                     if event_type == "done":
                         return
@@ -130,6 +126,16 @@ class JsonRpcClient:
                             json.loads(data_str),
                             model.output_type if model is not None else None,
                         )
+
+            if buffer:
+                event_type, data_str = _parse_sse_event(buffer)
+                if event_type == "error":
+                    raise BlazeRPCError(f"Stream error: {data_str}")
+                if event_type != "done" and data_str:
+                    yield _restore_result(
+                        json.loads(data_str),
+                        model.output_type if model is not None else None,
+                    )
 
     async def close(self) -> None:
         """Close the underlying HTTP session."""
@@ -175,6 +181,29 @@ def _prepare_params(
                     f"Missing tensor input '{key}' for model '{model.name}'"
                 )
     return result
+
+
+def _sse_separator(buffer: bytes) -> tuple[int, int] | None:
+    """Return the earliest complete SSE event boundary in *buffer*."""
+    match = re.search(
+        rb"\r\n\r\n|\r\n\n|\r\n\r|\n\r\n|\n\n|\n\r|\r\r\n|\r\r",
+        buffer,
+    )
+    if match is None:
+        return None
+    return match.start(), match.end() - match.start()
+
+
+def _parse_sse_event(event_data: bytes) -> tuple[str, str]:
+    """Extract the event type and joined data fields from one SSE event."""
+    event_type = ""
+    data_lines: list[str] = []
+    for line in event_data.decode().splitlines():
+        if line.startswith("event:"):
+            event_type = line[6:].removeprefix(" ")
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].removeprefix(" "))
+    return event_type, "\n".join(data_lines)
 
 
 def _restore_result(value: Any, type_hint: Any = None) -> Any:

@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
     from blazerpc.server.middleware import TransportMiddleware
 
+from blazerpc.exceptions import ModelNotFoundError, SerializationError, ValidationError
+
 log = logging.getLogger("blazerpc.server.jsonrpc")
 
 
@@ -111,9 +113,7 @@ class JsonRpcServer:
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            await self._run_middleware_response(
-                "", 200, time.monotonic() - start
-            )
+            await self._run_middleware_response("", 200, time.monotonic() - start)
             return web.json_response(
                 {
                     "jsonrpc": "2.0",
@@ -126,17 +126,25 @@ class JsonRpcServer:
         # Each batch element has its own middleware lifecycle so method-aware
         # authorization and metrics behave the same as independent requests.
         if isinstance(body, list):
+            if not body:
+                result, status = await self._dispatch_jsonrpc(
+                    body, peer=peer, headers=headers
+                )
+                return web.json_response(result, status=status)
             processed = await asyncio.gather(
                 *(
                     self._dispatch_jsonrpc(item, peer=peer, headers=headers)
                     for item in body
                 )
             )
-            return web.json_response([result for result, _ in processed])
+            results = [result for result, _ in processed if result is not None]
+            if not results:
+                return web.Response(status=204)
+            return web.json_response(results)
 
-        result, status = await self._dispatch_jsonrpc(
-            body, peer=peer, headers=headers
-        )
+        result, status = await self._dispatch_jsonrpc(body, peer=peer, headers=headers)
+        if result is None:
+            return web.Response(status=204)
         return web.json_response(result, status=status)
 
     async def _handle_sse(self, request: web.Request) -> web.StreamResponse:
@@ -147,9 +155,7 @@ class JsonRpcServer:
         lifecycle_method = f"stream.{method}"
         start = time.monotonic()
 
-        denial = await self._run_middleware_request(
-            lifecycle_method, peer, headers
-        )
+        denial = await self._run_middleware_request(lifecycle_method, peer, headers)
         if denial is not None:
             status, message = denial
             await self._run_middleware_response(
@@ -165,7 +171,22 @@ class JsonRpcServer:
                 status = 400
                 return web.json_response({"error": "Invalid JSON body"}, status=400)
 
-            params = body.get("params", {}) if isinstance(body, dict) else {}
+            if not isinstance(body, dict):
+                status = 400
+                return web.json_response(
+                    {"error": "Request body must be an object"}, status=status
+                )
+
+            params = body.get("params", {})
+            try:
+                self._dispatcher.validate_streaming(lifecycle_method, params)
+            except ModelNotFoundError as exc:
+                status = 404
+                return web.json_response({"error": str(exc)}, status=status)
+            except (ValidationError, SerializationError) as exc:
+                status = 400
+                return web.json_response({"error": str(exc)}, status=status)
+
             response = web.StreamResponse(
                 headers={
                     "Content-Type": "text/event-stream",
@@ -186,9 +207,7 @@ class JsonRpcServer:
                 status = 500
                 log.exception("Streaming error for method %s", method)
                 error_data = json.dumps({"error": "Internal server error"})
-                await response.write(
-                    f"event: error\ndata: {error_data}\n\n".encode()
-                )
+                await response.write(f"event: error\ndata: {error_data}\n\n".encode())
 
             await response.write(b"event: done\ndata: {}\n\n")
             await response.write_eof()
@@ -211,9 +230,7 @@ class JsonRpcServer:
         else:
             status = 200
             result = {"status": "ok"}
-        await self._run_middleware_response(
-            method, status, time.monotonic() - start
-        )
+        await self._run_middleware_response(method, status, time.monotonic() - start)
         return web.json_response(result, status=status)
 
     # ------------------------------------------------------------------
@@ -226,33 +243,46 @@ class JsonRpcServer:
         *,
         peer: str,
         headers: dict[str, str],
-    ) -> tuple[dict[str, Any], int]:
+    ) -> tuple[dict[str, Any] | None, int]:
         method = body.get("method", "") if isinstance(body, dict) else ""
         request_id = body.get("id") if isinstance(body, dict) else None
         start = time.monotonic()
         denial = await self._run_middleware_request(method, peer, headers)
         if denial is not None:
             status, message = denial
-            result = self._jsonrpc_error(request_id, -32000, message)
+            result = (
+                None
+                if self._is_notification(body)
+                else self._jsonrpc_error(request_id, -32000, message)
+            )
         else:
             try:
-                result = await self._dispatcher.handle(
-                    body, peer=peer, headers=headers
-                )
-                status = 200
+                result = await self._dispatcher.handle(body, peer=peer, headers=headers)
+                status = 204 if result is None else 200
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("Unhandled JSON-RPC error for method %s", method)
                 status = 500
-                result = self._jsonrpc_error(
-                    request_id, -32603, "Internal server error"
+                result = (
+                    None
+                    if self._is_notification(body)
+                    else self._jsonrpc_error(
+                        request_id, -32603, "Internal server error"
+                    )
                 )
 
-        await self._run_middleware_response(
-            method, status, time.monotonic() - start
-        )
+        await self._run_middleware_response(method, status, time.monotonic() - start)
         return result, status
+
+    @staticmethod
+    def _is_notification(body: Any) -> bool:
+        return (
+            isinstance(body, dict)
+            and body.get("jsonrpc") == "2.0"
+            and isinstance(body.get("method"), str)
+            and "id" not in body
+        )
 
     async def _run_middleware_request(
         self, method: str, peer: str, headers: dict[str, str]

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from blazerpc import BlazeApp, Context, Depends
 from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
+from blazerpc.exceptions import ValidationError
 from blazerpc.runtime.json_serialization import tensor_to_json
 from blazerpc.types import TensorInput, TensorOutput
 
@@ -260,3 +262,10 @@ async def test_handle_streaming() -> None:
         )
     ]
     assert chunks == ["hello", "world"]
+
+
+async def test_malformed_streaming_method_raises_validation_error() -> None:
+    _, dispatcher = _make_app_and_dispatcher()
+
+    with pytest.raises(ValidationError, match=r"stream\.<model>"):
+        await anext(dispatcher.handle_streaming("predict.echo", {"text": "hello"}))

@@ -106,8 +106,7 @@ async def test_client_routes_multiple_model_versions() -> None:
         async with JsonRpcClient(f"http://127.0.0.1:{port}/jsonrpc") as client:
             assert await client.predict("echo", text="one") == "v1:one"
             assert (
-                await client.predict("echo", model_version="2", text="two")
-                == "v2:two"
+                await client.predict("echo", model_version="2", text="two") == "v2:two"
             )
     finally:
         await server.stop()
@@ -362,5 +361,191 @@ async def test_batch_middleware_callbacks_are_per_element() -> None:
             ("response", "predict.echo", 200),
             ("response", "predict.missing", 200),
         }
+    finally:
+        await server.stop()
+
+
+async def test_jsonrpc_invalid_requests_and_mixed_batch_conformance() -> None:
+    app = BlazeApp(enable_batching=False)
+    calls: list[str] = []
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        calls.append(text)
+        return text
+
+    server, port = await _start_test_server(app)
+    url = f"http://127.0.0.1:{port}/jsonrpc"
+    try:
+        async with aiohttp.ClientSession() as session:
+            invalid_payloads = [
+                {"data": "null", "headers": {"Content-Type": "application/json"}},
+                {"json": 1},
+                {"json": "request"},
+            ]
+            for request_kwargs in invalid_payloads:
+                async with session.post(url, **request_kwargs) as resp:
+                    assert resp.status == 200
+                    body = await resp.json()
+                    assert body["error"]["code"] == -32600
+                    assert body["id"] is None
+
+            async with session.post(url, json=[]) as resp:
+                assert resp.status == 200
+                body = await resp.json()
+                assert body["error"]["code"] == -32600
+
+            batch = [
+                7,
+                {"jsonrpc": "2.0", "method": 3, "id": 2},
+                {
+                    "jsonrpc": "2.0",
+                    "method": "predict.echo",
+                    "params": {"text": "reply"},
+                    "id": 3,
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "method": "predict.echo",
+                    "params": {"text": "notify"},
+                },
+            ]
+            async with session.post(url, json=batch) as resp:
+                assert resp.status == 200
+                body = await resp.json()
+
+        assert [item.get("id") for item in body] == [None, 2, 3]
+        assert [item.get("error", {}).get("code") for item in body[:2]] == [
+            -32600,
+            -32600,
+        ]
+        assert body[2]["result"] == "reply"
+        assert calls == ["reply", "notify"]
+    finally:
+        await server.stop()
+
+
+async def test_jsonrpc_notifications_have_no_response() -> None:
+    app = BlazeApp(enable_batching=False)
+    calls: list[str] = []
+
+    @app.model("record")
+    def record(value: str) -> str:
+        calls.append(value)
+        return value
+
+    server, port = await _start_test_server(app)
+    url = f"http://127.0.0.1:{port}/jsonrpc"
+    try:
+        notification = {
+            "jsonrpc": "2.0",
+            "method": "predict.record",
+            "params": {"value": "one"},
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=notification) as resp:
+                assert resp.status == 204
+                assert await resp.read() == b""
+
+            async with session.post(
+                url,
+                json=[
+                    {**notification, "params": {"value": "two"}},
+                    {**notification, "params": {"value": "three"}},
+                ],
+            ) as resp:
+                assert resp.status == 204
+                assert await resp.read() == b""
+
+        assert calls == ["one", "two", "three"]
+    finally:
+        await server.stop()
+
+
+async def test_jsonrpc_param_errors_do_not_invoke_model() -> None:
+    app = BlazeApp(enable_batching=False)
+    calls = 0
+
+    @app.model("optional")
+    def optional(required: str, value: str | None = "default") -> str | None:
+        nonlocal calls
+        calls += 1
+        return value
+
+    server, port = await _start_test_server(app)
+    url = f"http://127.0.0.1:{port}/jsonrpc"
+    try:
+        async with aiohttp.ClientSession() as session:
+            invalid_params = [
+                {},
+                {"required": "ok", "unknown": 1},
+                {"required": "ok", "value": "x", "extra": 2},
+            ]
+            for request_id, params in enumerate(invalid_params, 1):
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "predict.optional",
+                    "params": params,
+                    "id": request_id,
+                }
+                async with session.post(url, json=payload) as resp:
+                    body = await resp.json()
+                    assert body["error"]["code"] == -32602
+
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "predict.optional",
+                "params": {"required": "ok", "value": None},
+                "id": 4,
+            }
+            async with session.post(url, json=payload) as resp:
+                body = await resp.json()
+
+        assert body["result"] is None
+        assert calls == 1
+    finally:
+        await server.stop()
+
+
+async def test_wrong_transport_cardinality_is_rejected_before_invocation() -> None:
+    app = BlazeApp(enable_batching=False)
+    unary_calls = 0
+    stream_calls = 0
+
+    @app.model("unary")
+    def unary(value: str) -> str:
+        nonlocal unary_calls
+        unary_calls += 1
+        return value
+
+    @app.model("tokens", streaming=True)
+    async def tokens(value: str) -> str:
+        nonlocal stream_calls
+        stream_calls += 1
+        yield value
+
+    server, port = await _start_test_server(app)
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "predict.tokens",
+                "params": {"value": "x"},
+                "id": 1,
+            }
+            async with session.post(
+                f"http://127.0.0.1:{port}/jsonrpc", json=payload
+            ) as resp:
+                body = await resp.json()
+                assert body["error"]["code"] == -32600
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/jsonrpc/stream/unary",
+                json={"params": {"value": "x"}},
+            ) as resp:
+                assert resp.status == 400
+
+        assert unary_calls == 0
+        assert stream_calls == 0
     finally:
         await server.stop()
