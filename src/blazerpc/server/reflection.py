@@ -9,7 +9,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from google.protobuf.descriptor_pool import DescriptorPool
+from grpclib.health.v1 import health_pb2
+from grpclib.reflection.v1 import reflection_pb2
+from grpclib.reflection.v1alpha import reflection_pb2 as reflection_v1alpha_pb2
 from grpclib.reflection.service import ServerReflection
+
+from blazerpc.codegen.servicer import InferenceServicer
 
 log = logging.getLogger("blazerpc.reflection")
 
@@ -35,4 +41,16 @@ def build_reflection_service(
     if handlers is None:
         handlers = []
 
-    return ServerReflection.extend(handlers)
+    pool = DescriptorPool()
+    for descriptor in (
+        health_pb2.DESCRIPTOR,
+        reflection_pb2.DESCRIPTOR,
+        reflection_v1alpha_pb2.DESCRIPTOR,
+    ):
+        pool.AddSerializedFile(descriptor.serialized_pb)
+
+    for handler in handlers:
+        if isinstance(handler, InferenceServicer):
+            pool.Add(handler.file_descriptor)
+
+    return ServerReflection.extend(handlers, pool=pool)

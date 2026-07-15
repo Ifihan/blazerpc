@@ -17,7 +17,7 @@ from grpclib.const import Cardinality, Handler
 from grpclib.server import Stream
 
 from blazerpc.codegen.invoke import invoke_model, invoke_streaming_model, resolve_deps
-from blazerpc.codegen.proto import _sanitize_name
+from blazerpc.codegen.proto import ProtoGenerator, _sanitize_name
 from blazerpc.codegen.proto_types import (
     _TensorProtoMsg,
     build_message_classes,
@@ -51,6 +51,11 @@ class InferenceServicer:
         self._registry = registry
         self._batchers = batchers or {}
         self._app_state = app_state
+
+    @property
+    def file_descriptor(self) -> Any:
+        """Return the dynamic service descriptor used by server reflection."""
+        return ProtoGenerator().generate_file_descriptor(self._registry)
 
     def __mapping__(self) -> dict[str, Handler]:
         mapping: dict[str, Handler] = {}

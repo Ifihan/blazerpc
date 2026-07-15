@@ -21,22 +21,30 @@ log = logging.getLogger("blazerpc.server")
 
 
 class RawCodec(CodecBase):
-    """Pass-through codec that lets handlers manage their own serialization.
+    """Codec supporting raw inference and standard Protobuf services.
 
-    BlazeRPC handlers encode/decode Protobuf messages themselves using
-    betterproto, so the codec simply forwards raw bytes without additional
-    processing.
+    BlazeRPC inference handlers declare no message type and manage their own
+    serialization.  Standard services such as health and reflection declare
+    generated Protobuf types and are encoded and decoded normally.
     """
 
     __content_subtype__ = "proto"
 
     def encode(self, message: Any, message_type: Any) -> bytes:
-        if isinstance(message, bytes):
-            return message
-        return bytes(message)
+        if message_type is None:
+            if not isinstance(message, bytes):
+                raise TypeError("Raw messages must be bytes")
+            return bytes(message)
+        if not isinstance(message, message_type):
+            raise TypeError(
+                f"Message must be of type {message_type!r}, not {type(message)!r}"
+            )
+        return message.SerializeToString()
 
     def decode(self, data: bytes, message_type: Any) -> Any:
-        return data
+        if message_type is None:
+            return data
+        return message_type.FromString(data)
 
 
 class GRPCServer:

@@ -12,7 +12,12 @@ import numpy as np
 import pytest
 from grpclib.client import Channel
 from grpclib.const import Cardinality
+from grpclib.health.v1.health_grpc import HealthStub
+from grpclib.health.v1.health_pb2 import HealthCheckRequest, HealthCheckResponse
+from grpclib.reflection.v1.reflection_grpc import ServerReflectionStub
+from grpclib.reflection.v1.reflection_pb2 import ServerReflectionRequest
 from grpclib.server import Server
+from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorProto
 
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
@@ -20,6 +25,7 @@ from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import Context, Depends
 from blazerpc.server.grpc import RawCodec
 from blazerpc.server.health import build_health_service
+from blazerpc.server.reflection import build_reflection_service
 from blazerpc.types import TensorInput, TensorOutput
 
 
@@ -39,6 +45,81 @@ async def test_server_with_health_starts_and_stops() -> None:
     await server.start("127.0.0.1", 0)
     server.close()
     await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_standard_health_client_over_wire() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        return text
+
+    servicer = build_servicer(app.registry)
+    health = build_health_service([servicer])
+    server = Server([servicer, health], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    channel = Channel("127.0.0.1", _get_server_port(server))
+    try:
+        response = await HealthStub(channel).Check(
+            HealthCheckRequest(service="blazerpc.InferenceService")
+        )
+        assert response.status == HealthCheckResponse.SERVING
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_reflection_returns_inference_file_descriptor() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("score_model")
+    def score_model(features: list[float], label: str) -> int:
+        return len(features) + len(label)
+
+    servicer = build_servicer(app.registry)
+    reflection_handlers = build_reflection_service([servicer])
+    server = Server(reflection_handlers, codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    channel = Channel("127.0.0.1", _get_server_port(server))
+    try:
+        stub = ServerReflectionStub(channel)
+        async with stub.ServerReflectionInfo.open() as stream:
+            await stream.send_message(
+                ServerReflectionRequest(
+                    file_containing_symbol="blazerpc.InferenceService"
+                ),
+                end=True,
+            )
+            response = await stream.recv_message()
+
+        serialized = response.file_descriptor_response.file_descriptor_proto
+        assert len(serialized) == 1
+        descriptor = FileDescriptorProto.FromString(serialized[0])
+        assert descriptor.name == "blaze_service.proto"
+
+        service = next(s for s in descriptor.service if s.name == "InferenceService")
+        method = next(m for m in service.method if m.name == "PredictScoreModel")
+        assert method.input_type == ".blazerpc.ScoreModelRequest"
+        assert method.output_type == ".blazerpc.ScoreModelResponse"
+
+        messages = {message.name: message for message in descriptor.message_type}
+        request_fields = {
+            field.name: field for field in messages["ScoreModelRequest"].field
+        }
+        assert request_fields["features"].label == FieldDescriptorProto.LABEL_REPEATED
+        assert request_fields["features"].type == request_fields["features"].TYPE_FLOAT
+        assert request_fields["label"].type == request_fields["label"].TYPE_STRING
+        assert (
+            messages["ScoreModelResponse"].field[0].type
+            == FieldDescriptorProto.TYPE_INT64
+        )
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
 
 
 @pytest.mark.asyncio
