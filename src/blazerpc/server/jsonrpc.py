@@ -44,29 +44,50 @@ class JsonRpcServer:
         self._runner: web.AppRunner | None = None
         self._shutdown_event: asyncio.Event = asyncio.Event()
 
-    async def start(self, host: str = "0.0.0.0", port: int = 8080) -> None:
+    async def start(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+        *,
+        handle_signals: bool = True,
+    ) -> None:
         """Start serving and block until shutdown is requested."""
+        self._shutdown_event.clear()
         app = web.Application()
         app.router.add_post("/jsonrpc", self._handle_jsonrpc)
         app.router.add_post("/jsonrpc/stream/{method:.+}", self._handle_sse)
         app.router.add_get("/health", self._handle_health)
 
         self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        site = web.TCPSite(self._runner, host, port)
-        await site.start()
-
-        log.info("JSON-RPC server listening on %s:%d", host, port)
-
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, self._signal_shutdown)
+        installed_signals: list[signal.Signals] = []
+        try:
+            await self._runner.setup()
+            site = web.TCPSite(self._runner, host, port)
+            await site.start()
 
-        await self._shutdown_event.wait()
-        await self.stop()
+            log.info("JSON-RPC server listening on %s:%d", host, port)
+
+            if handle_signals:
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    try:
+                        loop.add_signal_handler(sig, self._signal_shutdown)
+                    except (NotImplementedError, RuntimeError):
+                        break
+                    installed_signals.append(sig)
+
+            await self._shutdown_event.wait()
+        finally:
+            for sig in installed_signals:
+                try:
+                    loop.remove_signal_handler(sig)
+                except (NotImplementedError, RuntimeError):
+                    pass
+            await self.stop()
 
     async def stop(self) -> None:
         """Gracefully shut down the server."""
+        self._shutdown_event.set()
         if self._runner is None:
             return
         log.info("Shutting down JSON-RPC server (grace %.1fs)…", self._grace_period)

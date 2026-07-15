@@ -67,26 +67,40 @@ class GRPCServer:
         self,
         host: str = "0.0.0.0",
         port: int = 50051,
+        *,
+        handle_signals: bool = True,
     ) -> None:
         """Start serving and block until shutdown is requested."""
+        self._shutdown_event.clear()
         self._server = Server(self._handlers, codec=RawCodec())
         for mw in self._middleware:
             mw.attach(self._server)
-        await self._server.start(host, port)
-
-        log.info("Server listening on %s:%d", host, port)
-
-        # Install signal handlers for graceful shutdown.
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, self._signal_shutdown)
+        installed_signals: list[signal.Signals] = []
+        try:
+            await self._server.start(host, port)
+            log.info("Server listening on %s:%d", host, port)
 
-        # Block until a signal triggers the shutdown event.
-        await self._shutdown_event.wait()
-        await self.stop()
+            if handle_signals:
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    try:
+                        loop.add_signal_handler(sig, self._signal_shutdown)
+                    except (NotImplementedError, RuntimeError):
+                        break
+                    installed_signals.append(sig)
+
+            await self._shutdown_event.wait()
+        finally:
+            for sig in installed_signals:
+                try:
+                    loop.remove_signal_handler(sig)
+                except (NotImplementedError, RuntimeError):
+                    pass
+            await self.stop()
 
     async def stop(self) -> None:
         """Gracefully shut down the server."""
+        self._shutdown_event.set()
         if self._server is None:
             return
         log.info("Shutting down (grace period %.1fs)…", self._grace_period)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import signal
 from typing import Any, Callable, get_origin
 
 import numpy as np
@@ -267,11 +268,49 @@ class BlazeApp:
         )
         jsonrpc_server = JsonRpcServer(dispatcher)
 
+        loop = asyncio.get_running_loop()
+        shutdown_event = asyncio.Event()
+        installed_signals: list[signal.Signals] = []
+        server_tasks = [
+            asyncio.create_task(
+                grpc_server.start(host, grpc_port, handle_signals=False)
+            ),
+            asyncio.create_task(
+                jsonrpc_server.start(host, http_port, handle_signals=False)
+            ),
+        ]
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        all_tasks: list[asyncio.Task[Any]] = [*server_tasks, shutdown_task]
+
         try:
-            await asyncio.gather(
-                grpc_server.start(host, grpc_port),
-                jsonrpc_server.start(host, http_port),
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, shutdown_event.set)
+                except (NotImplementedError, RuntimeError):
+                    break
+                installed_signals.append(sig)
+
+            done, _ = await asyncio.wait(
+                all_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
             )
+            for task in server_tasks:
+                if task in done:
+                    task.result()
         finally:
+            await asyncio.gather(
+                grpc_server.stop(),
+                jsonrpc_server.stop(),
+                return_exceptions=True,
+            )
+            for task in all_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*all_tasks, return_exceptions=True)
+            for sig in installed_signals:
+                try:
+                    loop.remove_signal_handler(sig)
+                except (NotImplementedError, RuntimeError):
+                    pass
             for batcher in batchers.values():
                 await batcher.stop()
