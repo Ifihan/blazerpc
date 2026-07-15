@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import inspect
+import re
 from typing import Any, Callable
 
 from blazerpc.exceptions import ModelNotFoundError, ValidationError
-from blazerpc.types import extract_type_info
+from blazerpc.types import _TensorType, extract_type_info, validate_tensor_type
+
+
+_VERSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_MODEL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
+_PROTO_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def model_key(name: str, version: str = "1") -> str:
+    """Return the internal registry key for a model version."""
+    return f"{name}:{version}"
+
+
+def batcher_key(name: str, version: str = "1") -> str:
+    """Return a version-aware batcher key, preserving the v1 key."""
+    return name if version == "1" else f"{name}:v{version}"
 
 
 @dataclass
@@ -32,7 +49,91 @@ class ModelRegistry:
         func: Callable[..., object],
         streaming: bool = False,
     ) -> None:
+        from blazerpc.codegen.proto import _model_proto_name, _type_to_proto_field
+
+        if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+            raise ValidationError(
+                "Model version must start with an ASCII letter or digit and contain "
+                "only ASCII letters, digits, '.', '_', or '-'",
+                field="version",
+            )
+        if not isinstance(streaming, bool):
+            raise ValidationError("streaming must be a boolean", field="streaming")
+
+        if not isinstance(name, str):
+            raise ValidationError("Model name must be a string", field="name")
+        candidate = ModelInfo(name=name, version=version, func=func)
+        proto_name = _model_proto_name(candidate)
+        if not _MODEL_NAME_RE.fullmatch(name) or not _PROTO_IDENTIFIER_RE.fullmatch(
+            proto_name
+        ):
+            raise ValidationError(
+                f"Model name {name!r} does not produce a valid Protobuf identifier",
+                field="name",
+            )
+
+        key = model_key(name, version)
+        if key in self.models:
+            raise ValidationError(
+                f"Model '{name}' version '{version}' is already registered",
+                field=name,
+            )
+        for registered in self.models.values():
+            if _model_proto_name(registered) == proto_name:
+                raise ValidationError(
+                    f"Model '{name}' version '{version}' collides with model "
+                    f"'{registered.name}' version '{registered.version}' after "
+                    "Protobuf name sanitization",
+                    field=name,
+                )
+
         type_info = extract_type_info(func)
+        for param in inspect.signature(func).parameters.values():
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                raise ValidationError(
+                    f"Parameter {param.name!r} must be an explicit keyword parameter",
+                    field=param.name,
+                )
+        if type_info["output"] is type(None):
+            type_info["output"] = None
+        tensor_types = [
+            hint
+            for hint in (*type_info["inputs"].values(), type_info["output"])
+            if isinstance(hint, _TensorType)
+        ]
+        for tensor_type in tensor_types:
+            try:
+                validate_tensor_type(tensor_type)
+            except ValueError as exc:
+                raise ValidationError(str(exc), field=name) from exc
+        for param_name, annotation in type_info["inputs"].items():
+            if not _PROTO_IDENTIFIER_RE.fullmatch(param_name):
+                raise ValidationError(
+                    f"Parameter name {param_name!r} is not a valid Protobuf field name",
+                    field=param_name,
+                )
+            try:
+                _type_to_proto_field(annotation)
+            except TypeError as exc:
+                raise ValidationError(str(exc), field=param_name) from exc
+        if type_info["output"] is not None:
+            try:
+                _type_to_proto_field(type_info["output"])
+            except TypeError as exc:
+                raise ValidationError(str(exc), field="return") from exc
+
+        if not streaming and (
+            inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)
+        ):
+            raise ValidationError(
+                "Generator and async generator functions must be declared streaming",
+                field=name,
+            )
+
         total_params = (
             len(type_info["inputs"])
             + len(type_info["deps"])
@@ -45,7 +146,6 @@ class ModelRegistry:
                 field=name,
             )
 
-        key = f"{name}:{version}"
         self.models[key] = ModelInfo(
             name=name,
             version=version,
@@ -58,13 +158,13 @@ class ModelRegistry:
         )
 
     def get(self, name: str, version: str = "1") -> ModelInfo:
-        model = self.models.get(f"{name}:{version}")
+        model = self.models.get(model_key(name, version))
         if model is None:
             raise ModelNotFoundError(name, version)
         return model
 
     def get_or_none(self, name: str, version: str = "1") -> ModelInfo | None:
-        return self.models.get(f"{name}:{version}")
+        return self.models.get(model_key(name, version))
 
     def list_models(self) -> list[ModelInfo]:
         return list(self.models.values())

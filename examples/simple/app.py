@@ -18,6 +18,8 @@ Export the .proto file:
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
@@ -34,8 +36,8 @@ app = BlazeApp(name="iris-demo", enable_batching=False)
 
 @app.model("iris")
 def predict_iris(
-    features: TensorInput[np.float32, "batch", 4],
-) -> TensorOutput[np.float32, "batch", 3]:
+    features: TensorInput[np.float32, tuple[Literal["batch"], Literal[4]]],
+) -> TensorOutput[np.float32, tuple[Literal["batch"], Literal[3]]]:
     """Classify iris flowers. Returns class probabilities.
 
     Input: a batch of samples, each with 4 features

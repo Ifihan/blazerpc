@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, get_args, get_origin
 
+from google.protobuf import descriptor_pb2
+
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
 from blazerpc.types import PYTHON_TYPE_MAP, _TensorType
 
@@ -11,6 +13,29 @@ from blazerpc.types import PYTHON_TYPE_MAP, _TensorType
 def _sanitize_name(name: str) -> str:
     """Convert a model name to a valid proto identifier (PascalCase)."""
     return "".join(part.capitalize() for part in name.replace("-", "_").split("_"))
+
+
+def _version_suffix(version: str) -> str:
+    """Return an injective proto-identifier suffix for a non-v1 version."""
+    if version == "1":
+        return ""
+    encoded = "".join(
+        chr(byte) if chr(byte).isalnum() and byte < 128 else f"_{byte:02x}"
+        for byte in version.encode("utf-8")
+    )
+    return f"V{encoded}"
+
+
+def _model_proto_name(model: ModelInfo) -> str:
+    return f"{_sanitize_name(model.name)}{_version_suffix(model.version)}"
+
+
+def _rpc_name_for(name: str, version: str = "1") -> str:
+    return f"Predict{_sanitize_name(name)}{_version_suffix(version)}"
+
+
+def _rpc_name(model: ModelInfo) -> str:
+    return _rpc_name_for(model.name, model.version)
 
 
 def _type_to_proto_field(py_type: Any) -> tuple[str, bool]:
@@ -26,20 +51,18 @@ def _type_to_proto_field(py_type: Any) -> tuple[str, bool]:
     origin = get_origin(py_type)
     if origin is list:
         args = get_args(py_type)
-        if args:
-            inner, _ = _type_to_proto_field(args[0])
-            return inner, True
-        return "bytes", True
-
-    # dict[K, V]  →  not directly supported as a field; fall back to bytes
-    if origin is dict:
-        return "bytes", False
+        if len(args) != 1:
+            raise TypeError("List annotations must specify one scalar element type")
+        inner, repeated = _type_to_proto_field(args[0])
+        if repeated or inner == "TensorProto":
+            raise TypeError("Nested lists and repeated tensor fields are not supported")
+        return inner, True
 
     # Plain Python scalars
     if isinstance(py_type, type) and py_type in PYTHON_TYPE_MAP:
         return PYTHON_TYPE_MAP[py_type], False
 
-    return "bytes", False
+    raise TypeError(f"Unsupported Protobuf annotation: {py_type!r}")
 
 
 class ProtoGenerator:
@@ -65,6 +88,49 @@ class ProtoGenerator:
         lines += self._generate_service(models)
         return "\n".join(lines) + "\n"
 
+    def generate_file_descriptor(
+        self, registry: ModelRegistry
+    ) -> descriptor_pb2.FileDescriptorProto:
+        """Build the descriptor exposed through gRPC server reflection."""
+        file_proto = descriptor_pb2.FileDescriptorProto(
+            name="blaze_service.proto",
+            package="blazerpc",
+            syntax="proto3",
+        )
+
+        tensor = file_proto.message_type.add(name="TensorProto")
+        self._add_descriptor_field(tensor, "shape", 1, "int64", repeated=True)
+        self._add_descriptor_field(tensor, "dtype", 2, "string")
+        self._add_descriptor_field(tensor, "data", 3, "bytes")
+
+        service = file_proto.service.add(name="InferenceService")
+        for model in registry.list_models():
+            name = _model_proto_name(model)
+            request = file_proto.message_type.add(name=f"{name}Request")
+            for number, (field_name, field_type) in enumerate(
+                model.input_types.items(), start=1
+            ):
+                proto_type, repeated = _type_to_proto_field(field_type)
+                self._add_descriptor_field(
+                    request, field_name, number, proto_type, repeated=repeated
+                )
+
+            response = file_proto.message_type.add(name=f"{name}Response")
+            if model.output_type is not None:
+                proto_type, repeated = _type_to_proto_field(model.output_type)
+                self._add_descriptor_field(
+                    response, "result", 1, proto_type, repeated=repeated
+                )
+
+            method = service.method.add(
+                name=_rpc_name(model),
+                input_type=f".blazerpc.{name}Request",
+                output_type=f".blazerpc.{name}Response",
+            )
+            method.server_streaming = model.streaming
+
+        return file_proto
+
     # -- private helpers --------------------------------------------------
 
     @staticmethod
@@ -79,8 +145,39 @@ class ProtoGenerator:
         ]
 
     @staticmethod
+    def _add_descriptor_field(
+        message: descriptor_pb2.DescriptorProto,
+        name: str,
+        number: int,
+        proto_type: str,
+        *,
+        repeated: bool = False,
+    ) -> None:
+        scalar_types = {
+            "float": descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT,
+            "int64": descriptor_pb2.FieldDescriptorProto.TYPE_INT64,
+            "string": descriptor_pb2.FieldDescriptorProto.TYPE_STRING,
+            "bool": descriptor_pb2.FieldDescriptorProto.TYPE_BOOL,
+            "bytes": descriptor_pb2.FieldDescriptorProto.TYPE_BYTES,
+        }
+        field = message.field.add(
+            name=name,
+            number=number,
+            label=(
+                descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED
+                if repeated
+                else descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+            ),
+        )
+        if proto_type == "TensorProto":
+            field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+            field.type_name = ".blazerpc.TensorProto"
+        else:
+            field.type = scalar_types[proto_type]
+
+    @staticmethod
     def _generate_request_message(model: ModelInfo) -> list[str]:
-        name = _sanitize_name(model.name)
+        name = _model_proto_name(model)
         lines = [f"message {name}Request {{"]
         field_num = 1
         for param_name, param_type in model.input_types.items():
@@ -93,7 +190,7 @@ class ProtoGenerator:
 
     @staticmethod
     def _generate_response_message(model: ModelInfo) -> list[str]:
-        name = _sanitize_name(model.name)
+        name = _model_proto_name(model)
         lines = [f"message {name}Response {{"]
         if model.output_type is not None:
             proto_type, repeated = _type_to_proto_field(model.output_type)
@@ -106,15 +203,15 @@ class ProtoGenerator:
     def _generate_service(models: list[ModelInfo]) -> list[str]:
         lines = ["service InferenceService {"]
         for model in models:
-            name = _sanitize_name(model.name)
+            name = _model_proto_name(model)
             if model.streaming:
                 lines.append(
-                    f"  rpc Predict{name}({name}Request) "
+                    f"  rpc {_rpc_name(model)}({name}Request) "
                     f"returns (stream {name}Response);"
                 )
             else:
                 lines.append(
-                    f"  rpc Predict{name}({name}Request) returns ({name}Response);"
+                    f"  rpc {_rpc_name(model)}({name}Request) returns ({name}Response);"
                 )
         lines += ["}", ""]
         return lines

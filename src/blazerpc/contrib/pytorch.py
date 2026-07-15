@@ -8,24 +8,27 @@ automatically.
 from __future__ import annotations
 
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar, cast
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
+
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 
-def torch_to_numpy(tensor: Any) -> np.ndarray:
+def torch_to_numpy(tensor: Any) -> NDArray[Any]:
     """Convert a PyTorch tensor to a NumPy array.
 
     Detaches from the computation graph and moves to CPU if needed.
     """
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f"Expected torch.Tensor, got {type(tensor).__name__}")
-    return tensor.detach().cpu().numpy()
+    return cast(NDArray[Any], tensor.detach().cpu().numpy())
 
 
 def numpy_to_torch(
-    arr: np.ndarray,
+    arr: NDArray[Any],
     device: str = "cpu",
     dtype: Any = None,
 ) -> Any:
@@ -49,10 +52,10 @@ def numpy_to_torch(
 
 
 def torch_model(
-    func: Callable | None = None,
+    func: _F | None = None,
     *,
     device: str = "cpu",
-) -> Callable:
+) -> _F | Callable[[_F], _F]:
     """Decorator that auto-converts NumPy inputs to torch tensors and back.
 
     Usage::
@@ -65,7 +68,7 @@ def torch_model(
             # Return value is converted back to np.ndarray automatically
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: _F) -> _F:
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             converted_args = [
@@ -83,7 +86,7 @@ def torch_model(
                 return torch_to_numpy(result)
             return result
 
-        return wrapper
+        return cast(_F, wrapper)
 
     if func is not None:
         return decorator(func)

@@ -1,8 +1,10 @@
 """Tests for the BlazeRPC type system."""
 
-from __future__ import annotations
-
 import numpy as np
+from pathlib import Path
+import subprocess
+import sys
+from typing import Literal
 
 from blazerpc.types import (
     DTYPE_MAP,
@@ -31,6 +33,14 @@ def test_tensor_output_class_getitem() -> None:
     assert t.dtype is np.int64
     assert t.shape == ("batch", 1000)
     assert t.is_input is False
+
+
+def test_tensor_static_shape_syntax_preserves_runtime_metadata() -> None:
+    t = TensorInput[
+        np.float32,
+        tuple[Literal["batch"], Literal[224], Literal[224], Literal[3]],
+    ]
+    assert t.shape == ("batch", 224, 224, 3)
 
 
 def test_tensor_type_repr() -> None:
@@ -95,8 +105,8 @@ def test_extract_type_info_multiple_params() -> None:
 
 def test_extract_type_info_tensor_types() -> None:
     def predict(
-        x: TensorInput[np.float32, "batch", 224, 224, 3],
-    ) -> TensorOutput[np.float32, "batch", 1000]:
+        x: TensorInput[np.float32, "batch", 224, 224, 3],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 1000]:  # noqa: F821
         ...
 
     info = extract_type_info(predict)
@@ -110,3 +120,22 @@ def test_extract_type_info_no_return() -> None:
 
     info = extract_type_info(predict)
     assert info["output"] is type(None)
+
+
+def test_public_tensor_shape_api_type_checks_for_consumers(tmp_path: Path) -> None:
+    fixture = Path(__file__).parent / "typing" / "tensor_consumer.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--strict",
+            "--follow-imports=silent",
+            f"--cache-dir={tmp_path / 'mypy-cache'}",
+            str(fixture),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

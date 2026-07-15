@@ -12,7 +12,12 @@ import numpy as np
 import pytest
 from grpclib.client import Channel
 from grpclib.const import Cardinality
+from grpclib.health.v1.health_grpc import HealthStub
+from grpclib.health.v1.health_pb2 import HealthCheckRequest, HealthCheckResponse
+from grpclib.reflection.v1.reflection_grpc import ServerReflectionStub
+from grpclib.reflection.v1.reflection_pb2 import ServerReflectionRequest
 from grpclib.server import Server
+from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorProto
 
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
@@ -20,6 +25,7 @@ from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import Context, Depends
 from blazerpc.server.grpc import RawCodec
 from blazerpc.server.health import build_health_service
+from blazerpc.server.reflection import build_reflection_service
 from blazerpc.types import TensorInput, TensorOutput
 
 
@@ -39,6 +45,115 @@ async def test_server_with_health_starts_and_stops() -> None:
     await server.start("127.0.0.1", 0)
     server.close()
     await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_standard_health_client_over_wire() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        return text
+
+    servicer = build_servicer(app.registry)
+    health = build_health_service([servicer])
+    server = Server([servicer, health], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    channel = Channel("127.0.0.1", _get_server_port(server))
+    try:
+        response = await HealthStub(channel).Check(
+            HealthCheckRequest(service="blazerpc.InferenceService")
+        )
+        assert response.status == HealthCheckResponse.SERVING
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_reflection_returns_inference_file_descriptor() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("score_model")
+    def score_model(features: list[float], label: str) -> int:
+        return len(features) + len(label)
+
+    servicer = build_servicer(app.registry)
+    reflection_handlers = build_reflection_service([servicer])
+    server = Server(reflection_handlers, codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    channel = Channel("127.0.0.1", _get_server_port(server))
+    try:
+        stub = ServerReflectionStub(channel)
+        async with stub.ServerReflectionInfo.open() as stream:
+            await stream.send_message(
+                ServerReflectionRequest(
+                    file_containing_symbol="blazerpc.InferenceService"
+                ),
+                end=True,
+            )
+            response = await stream.recv_message()
+
+        serialized = response.file_descriptor_response.file_descriptor_proto
+        assert len(serialized) == 1
+        descriptor = FileDescriptorProto.FromString(serialized[0])
+        assert descriptor.name == "blaze_service.proto"
+
+        service = next(s for s in descriptor.service if s.name == "InferenceService")
+        method = next(m for m in service.method if m.name == "PredictScoreModel")
+        assert method.input_type == ".blazerpc.ScoreModelRequest"
+        assert method.output_type == ".blazerpc.ScoreModelResponse"
+
+        messages = {message.name: message for message in descriptor.message_type}
+        request_fields = {
+            field.name: field for field in messages["ScoreModelRequest"].field
+        }
+        assert request_fields["features"].label == FieldDescriptorProto.LABEL_REPEATED
+        assert request_fields["features"].type == request_fields["features"].TYPE_FLOAT
+        assert request_fields["label"].type == request_fields["label"].TYPE_STRING
+        assert (
+            messages["ScoreModelResponse"].field[0].type
+            == FieldDescriptorProto.TYPE_INT64
+        )
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_reflection_lists_inference_and_health_services_once() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        return text
+
+    servicer = build_servicer(app.registry)
+    health = build_health_service([servicer])
+    handlers = build_reflection_service([servicer, health])
+    mapping_paths = [path for handler in handlers for path in handler.__mapping__()]
+    assert len(mapping_paths) == len(set(mapping_paths))
+
+    server = Server(handlers, codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    channel = Channel("127.0.0.1", _get_server_port(server))
+    try:
+        stub = ServerReflectionStub(channel)
+        async with stub.ServerReflectionInfo.open() as stream:
+            await stream.send_message(
+                ServerReflectionRequest(list_services=""), end=True
+            )
+            response = await stream.recv_message()
+
+        services = [service.name for service in response.list_services_response.service]
+        assert services.count("blazerpc.InferenceService") == 1
+        assert services.count("grpc.health.v1.Health") == 1
+    finally:
+        channel.close()
+        server.close()
+        await server.wait_closed()
 
 
 @pytest.mark.asyncio
@@ -298,42 +413,86 @@ async def test_async_model_over_wire() -> None:
 
 @pytest.mark.asyncio
 async def test_unary_with_batching_over_wire() -> None:
-    """Batched model works end-to-end with per-model batcher lifecycle."""
-    from blazerpc.app import _make_batch_inference_fn
-    from blazerpc.runtime.batcher import Batcher
+    """Compatible tensor RPCs use one model call and receive split results."""
+    app = BlazeApp(enable_batching=True, max_batch_size=4, batch_timeout_ms=100)
+    calls = 0
 
-    app = BlazeApp(enable_batching=True, max_batch_size=4)
+    @app.model("double_batched")
+    def double_batched(
+        values: TensorInput[np.float32, "batch", 2],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 2]:  # noqa: F821
+        nonlocal calls
+        calls += 1
+        return values * 2
 
     @app.model("add")
     def add(a: float, b: float) -> float:
         return a + b
 
-    model = app.registry.get("add")
-    batcher = Batcher(app.max_batch_size, app.batch_timeout_ms)
-    await batcher.start(_make_batch_inference_fn(model))
+    model = app.registry.get("double_batched")
+    batchers = await app._create_batchers()
+    assert set(batchers) == {"double_batched"}
 
-    servicer = build_servicer(app.registry, batchers={"add": batcher})
+    servicer = build_servicer(app.registry, batchers=batchers)
     server = Server([servicer], codec=RawCodec())
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
     req_cls, resp_cls = build_message_classes(model)
+    add_req_cls, add_resp_cls = build_message_classes(app.registry.get("add"))
 
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
-        request_bytes = bytes(req_cls(a=10.0, b=20.0))
-        response = await _unary_call(
+        add_response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictAdd",
-            request_bytes,
-            resp_cls,
+            bytes(add_req_cls(a=10.0, b=20.0)),
+            add_resp_cls,
         )
-        assert abs(response.result - 30.0) < 1e-5  # type: ignore[union-attr]
+        assert abs(add_response.result - 30.0) < 1e-5  # type: ignore[union-attr]
+
+        arrays = [
+            np.array([[1, 2]], dtype=np.float32),
+            np.array([[3, 4], [5, 6]], dtype=np.float32),
+        ]
+        requests = [
+            bytes(
+                req_cls(
+                    values=_TensorProtoMsg(
+                        shape=list(array.shape),
+                        dtype="float",
+                        data=array.tobytes(),
+                    )
+                )
+            )
+            for array in arrays
+        ]
+        responses = await asyncio.gather(
+            *[
+                _unary_call(
+                    channel,
+                    "/blazerpc.InferenceService/PredictDoubleBatched",
+                    request,
+                    resp_cls,
+                )
+                for request in requests
+            ]
+        )
+        results = [
+            np.frombuffer(response.result.data, dtype=np.float32).reshape(  # type: ignore[union-attr]
+                response.result.shape  # type: ignore[union-attr]
+            )
+            for response in responses
+        ]
+        assert calls == 1
+        np.testing.assert_array_equal(results[0], arrays[0] * 2)
+        np.testing.assert_array_equal(results[1], arrays[1] * 2)
     finally:
         channel.close()
         server.close()
         await server.wait_closed()
-        await batcher.stop()
+        for batcher in batchers.values():
+            await batcher.stop()
 
 
 @pytest.mark.asyncio

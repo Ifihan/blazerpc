@@ -40,8 +40,21 @@ def predict_sentiment(text: list[str]) -> list[float]:
 | Parameter   | Type   | Default  | Description                                                          |
 | ----------- | ------ | -------- | -------------------------------------------------------------------- |
 | `name`      | `str`  | required | Model name. Converted to PascalCase for the RPC method name (e.g. `"sentiment"` becomes `PredictSentiment`). |
-| `version`   | `str`  | `"1"`    | Model version string. Stored as metadata; does not affect routing.   |
+| `version`   | `str`  | `"1"`    | Model version. Starts with an ASCII letter or digit and may also contain `.`, `_`, or `-`. |
 | `streaming` | `bool` | `False`  | If `True`, the function must be an async generator that yields responses. Produces a `returns (stream Response)` RPC. |
+
+Version `"1"` keeps the original wire names: `PredictSentiment`,
+`SentimentRequest`, and `predict.sentiment`. Other versions append `V<version>`
+to gRPC methods and message names and `.v<version>` to JSON-RPC methods. Proto
+identifiers hex-escape punctuation, so version `"2.0"` has suffix `V2_2e0`.
+For example, version `"2"` uses `PredictSentimentV2`, `SentimentV2Request`, and
+`predict.sentiment.v2`. Registering the same model name and version twice is an
+error; different versions may coexist.
+
+`BlazeClient.predict()` and `BlazeClient.stream()` always call version `"1"` and
+reserve all keyword arguments for model input fields. Use
+`predict_version(model_name, version, **kwargs)` or
+`stream_version(model_name, version, **kwargs)` to call another version.
 
 ## `JsonRpcServer` constructor
 
@@ -103,15 +116,15 @@ blaze serve <app_path> [OPTIONS]
 | ----------------- | ------- | ------------ | ---------------------------------------------------- |
 | `app_path`        | `str`   | required     | App import path in `module:attribute` format (e.g. `app:app`). |
 | `--host`          | `str`   | `"0.0.0.0"`  | Host to bind to.                                     |
-| `--port`          | `int`   | `50051`       | Port to listen on (gRPC).                            |
-| `--http-port`     | `int`   | `8080`        | Port for the JSON-RPC HTTP server.                   |
+| `--port`          | `int`   | `50051`       | Port to listen on (gRPC), from `1` to `65535`.       |
+| `--http-port`     | `int`   | `8080`        | Port for JSON-RPC HTTP, from `1` to `65535`. Must differ from `--port` with `--transport both`. |
 | `--transport`     | `str`   | `"grpc"`      | Transport mode: `grpc`, `jsonrpc`, or `both`.        |
-| `--workers`       | `int`   | `1`          | Number of worker processes.                          |
+| `--workers`       | `int`   | `1`          | Worker count. Only `1` is currently supported; other values are rejected. |
 | `--reload`        | `bool`  | `False`       | Enable auto-reload for development. Requires `watchfiles`. |
 
 #### Hot reload
 
-When `--reload` is enabled, the server watches for `.py` file changes in the current directory and automatically restarts when changes are detected. This uses process-level restart (like uvicorn) for a clean reimport of all modules.
+When `--reload` is enabled, the server watches for `.py` file changes in the current directory and automatically restarts when changes are detected. This uses process-level restart (like uvicorn) for a clean reimport of all modules. The selected transport and its configured `--port` and `--http-port` are preserved across restarts.
 
 ```bash
 blaze serve app:app --reload

@@ -207,6 +207,7 @@ class MyTransportMiddleware(TransportMiddleware):
 
 | Attribute   | Type    | Description                                      |
 | ----------- | ------- | ------------------------------------------------ |
+| `method`    | `str`   | RPC method name.                                 |
 | `status`    | `int`   | Response status code.                            |
 | `duration`  | `float` | Request duration in seconds.                     |
 | `transport` | `str`   | Transport identifier.                            |
@@ -226,6 +227,15 @@ from blazerpc.server.jsonrpc import JsonRpcServer
 
 server = JsonRpcServer(dispatcher, middleware=[TransportLoggingMiddleware()])
 ```
+
+Or configure it separately from gRPC middleware on `BlazeApp`:
+
+```python
+app = BlazeApp(jsonrpc_middleware=[TransportLoggingMiddleware()])
+```
+
+For JSON-RPC batch requests, middleware runs once per batch element, using that
+element's method. Middleware also applies to SSE streams and the health endpoint.
 
 !!! note
     gRPC-specific `Middleware` uses grpclib events and only works with `GRPCServer`. Transport-agnostic `TransportMiddleware` works with `JsonRpcServer` (and future transports). If you need middleware that covers both, use `TransportMiddleware`.

@@ -136,18 +136,22 @@ If the inference function raises an exception, every future in the batch receive
 
 BlazeRPC's type system bridges Python annotations and protobuf fields:
 
-| Python type                         | Proto type       | Notes                      |
-| ----------------------------------- | ---------------- | -------------------------- |
-| `str`                               | `string`         |                            |
-| `int`                               | `int64`          |                            |
-| `float`                             | `float`          |                            |
-| `bool`                              | `bool`           |                            |
-| `bytes`                             | `bytes`          |                            |
-| `list[float]`                       | `repeated float` | Any `list[T]` is supported |
-| `TensorInput[np.float32, 224, 224]` | `TensorProto`    | Shape and dtype metadata   |
-| `TensorOutput[np.float32, 1000]`    | `TensorProto`    |                            |
+| Python type                                                        | Proto type       | Notes                      |
+| ------------------------------------------------------------------ | ---------------- | -------------------------- |
+| `str`                                                              | `string`         |                            |
+| `int`                                                              | `int64`          |                            |
+| `float`                                                            | `float`          |                            |
+| `bool`                                                             | `bool`           |                            |
+| `bytes`                                                            | `bytes`          |                            |
+| `list[float]`                                                      | `repeated float` | Any `list[T]` is supported |
+| `TensorInput[np.float32, tuple[Literal[224], Literal[224]]]`       | `TensorProto`    | Shape and dtype metadata   |
+| `TensorOutput[np.float32, tuple[Literal[1000]]]`                   | `TensorProto`    |                            |
 
-`TensorInput` and `TensorOutput` are generic type annotations. At class-getitem time they produce a `_TensorType` instance that stores the dtype and shape. The codegen layer uses this metadata to emit `TensorProto` message fields and the serialization layer uses it to validate arrays at runtime.
+`TensorInput` and `TensorOutput` are generic type annotations; `Literal` comes
+from `typing`. At class-getitem time they produce a `_TensorType` instance that
+stores the dtype and shape. The codegen layer uses this metadata to emit
+`TensorProto` message fields and the serialization layer uses it to validate
+arrays at runtime.
 
 ## Middleware system
 

@@ -7,7 +7,8 @@ validation, and error handling.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import inspect
+from typing import Any, Awaitable, Callable, cast
 
 from blazerpc.exceptions import InferenceError
 from blazerpc.runtime.registry import ModelInfo
@@ -23,7 +24,7 @@ class ModelExecutor:
 
     def __init__(self, model: ModelInfo) -> None:
         self._model = model
-        self._is_async = asyncio.iscoroutinefunction(model.func)
+        self._is_async = inspect.iscoroutinefunction(model.func)
 
     @property
     def name(self) -> str:
@@ -40,7 +41,8 @@ class ModelExecutor:
         """
         try:
             if self._is_async:
-                return await self._model.func(**kwargs)
+                async_func = cast(Callable[..., Awaitable[Any]], self._model.func)
+                return await async_func(**kwargs)
             return await asyncio.to_thread(self._model.func, **kwargs)
         except Exception as exc:
             raise InferenceError(
@@ -56,8 +58,10 @@ class ModelExecutor:
         """
         try:
             if self._is_async:
-                return await self._model.func(kwargs_list)
-            return await asyncio.to_thread(self._model.func, kwargs_list)
+                async_func = cast(Callable[..., Awaitable[list[Any]]], self._model.func)
+                return await async_func(kwargs_list)
+            sync_func = cast(Callable[..., list[Any]], self._model.func)
+            return await asyncio.to_thread(sync_func, kwargs_list)
         except Exception as exc:
             raise InferenceError(
                 f"Model '{self.name}' batch inference failed: {exc}",

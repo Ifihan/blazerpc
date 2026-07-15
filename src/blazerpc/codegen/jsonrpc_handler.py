@@ -6,11 +6,13 @@ injection, and error mapping.
 
 Method naming convention:
     - ``predict.<model_name>`` — unary model call
+    - ``predict.<model_name>.v<version>`` — non-v1 unary model call
     - ``stream.<model_name>`` — server-streaming (must use the SSE endpoint)
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, AsyncIterator
 
@@ -24,7 +26,8 @@ from blazerpc.exceptions import (
     ValidationError,
 )
 from blazerpc.runtime.json_serialization import json_to_python, tensor_to_json
-from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
+from blazerpc.types import _TensorType
 
 log = logging.getLogger("blazerpc.jsonrpc")
 
@@ -73,54 +76,56 @@ class JsonRpcDispatcher:
 
     async def handle(
         self,
-        body: dict[str, Any],
+        body: Any,
         *,
         peer: str = "",
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Process a single JSON-RPC request and return a response dict."""
+        if not isinstance(body, dict):
+            return _error_response(None, INVALID_REQUEST, "Invalid JSON-RPC request")
+
         req_id = body.get("id")
+        is_notification = "id" not in body
 
         # Validate envelope
-        if body.get("jsonrpc") != "2.0" or "method" not in body:
+        if body.get("jsonrpc") != "2.0" or not isinstance(body.get("method"), str):
             return _error_response(req_id, INVALID_REQUEST, "Invalid JSON-RPC request")
 
         method: str = body["method"]
         params: dict[str, Any] = body.get("params", {})
 
         if not isinstance(params, dict):
-            return _error_response(req_id, INVALID_PARAMS, "params must be an object")
+            response = _error_response(
+                req_id, INVALID_PARAMS, "params must be an object"
+            )
+            return None if is_notification else response
 
         # Parse method name
-        model_name = _parse_method(method)
-        if model_name is None:
-            return _error_response(
+        model = self._resolve_method(method)
+        if model is None:
+            response = _error_response(
                 req_id,
                 METHOD_NOT_FOUND,
                 f"Unknown method: {method}. Use predict.<model> or stream.<model>",
             )
-
-        # Look up model
-        try:
-            model = self._registry.get(model_name)
-        except (ModelNotFoundError, KeyError):
-            return _error_response(
-                req_id, METHOD_NOT_FOUND, f"Model not found: {model_name}"
-            )
+            return None if is_notification else response
 
         # Streaming models cannot be called on the unary endpoint
-        if method.startswith("stream."):
-            return _error_response(
+        if model.streaming or method.startswith("stream."):
+            response = _error_response(
                 req_id,
                 INVALID_REQUEST,
-                f"Streaming model '{model_name}' must use the SSE endpoint",
+                f"Streaming model '{model.name}' must use the SSE endpoint",
             )
+            return None if is_notification else response
 
         # Decode params → model kwargs
         try:
             kwargs = _decode_json_request(params, model)
-        except (ValidationError, SerializationError, Exception) as exc:
-            return _error_response(req_id, INVALID_PARAMS, str(exc))
+        except (ValidationError, SerializationError) as exc:
+            response = _error_response(req_id, INVALID_PARAMS, str(exc))
+            return None if is_notification else response
 
         # Resolve dependencies
         _has_deps = bool(model.dep_params or model.context_params)
@@ -132,14 +137,21 @@ class JsonRpcDispatcher:
 
         # Execute
         try:
-            batcher = self._batchers.get(model.name)
+            batcher = self._batchers.get(batcher_key(model.name, model.version))
             raw_result = await invoke_model(model, kwargs, batcher=batcher)
         except InferenceError as exc:
-            return _error_response(req_id, INTERNAL_ERROR, str(exc))
+            response = _error_response(req_id, INTERNAL_ERROR, str(exc))
+            return None if is_notification else response
 
         # Encode response
-        result = _encode_json_response(raw_result, model)
-        return _success_response(req_id, result)
+        try:
+            result = _encode_json_response(raw_result, model)
+        except SerializationError as exc:
+            response = _error_response(
+                req_id, INTERNAL_ERROR, f"Invalid model output: {exc}"
+            )
+            return None if is_notification else response
+        return None if is_notification else _success_response(req_id, result)
 
     # ------------------------------------------------------------------
     # Batch dispatch (JSON-RPC spec allows arrays)
@@ -147,7 +159,7 @@ class JsonRpcDispatcher:
 
     async def handle_batch(
         self,
-        requests: list[dict[str, Any]],
+        requests: list[Any],
         *,
         peer: str = "",
         headers: dict[str, str] | None = None,
@@ -156,7 +168,8 @@ class JsonRpcDispatcher:
         import asyncio
 
         tasks = [self.handle(req, peer=peer, headers=headers) for req in requests]
-        return list(await asyncio.gather(*tasks))
+        results = await asyncio.gather(*tasks)
+        return [result for result in results if result is not None]
 
     # ------------------------------------------------------------------
     # Streaming dispatch (for SSE endpoint)
@@ -169,16 +182,10 @@ class JsonRpcDispatcher:
         *,
         peer: str = "",
         headers: dict[str, str] | None = None,
+        prepared: tuple[ModelInfo, dict[str, Any]] | None = None,
     ) -> AsyncIterator[Any]:
         """Yield chunks from a streaming model for SSE delivery."""
-        model_name = _parse_method(method)
-        if model_name is None:
-            raise ModelNotFoundError(
-                f"Unknown method: {method}", name=method, version=""
-            )
-
-        model = self._registry.get(model_name)
-        kwargs = _decode_json_request(params, model)
+        model, kwargs = prepared or self.prepare_streaming(method, params)
 
         _has_deps = bool(model.dep_params or model.context_params)
         if _has_deps:
@@ -189,6 +196,37 @@ class JsonRpcDispatcher:
 
         async for chunk in invoke_streaming_model(model, kwargs):
             yield _encode_json_response(chunk, model)
+
+    def validate_streaming(self, method: str, params: Any) -> ModelInfo:
+        """Validate an SSE call without resolving dependencies or invoking a model."""
+        model, _ = self.prepare_streaming(method, params)
+        return model
+
+    def prepare_streaming(
+        self, method: str, params: Any
+    ) -> tuple[ModelInfo, dict[str, Any]]:
+        """Validate and decode an SSE call for a single subsequent invocation."""
+        if not isinstance(method, str) or not method.startswith("stream."):
+            raise ValidationError("Streaming method must use stream.<model>")
+        if not isinstance(params, dict):
+            raise ValidationError("params must be an object")
+
+        model = self._resolve_method(method)
+        if model is None:
+            raise ModelNotFoundError(method.removeprefix("stream."), "")
+        if not model.streaming:
+            raise ValidationError(f"Model '{model.name}' is not streaming")
+        return model, _decode_json_request(params, model)
+
+    def _resolve_method(self, method: str) -> ModelInfo | None:
+        """Resolve an exact versioned method without discarding its version."""
+        for model in self._registry.list_models():
+            if method in {
+                jsonrpc_method("predict", model.name, model.version),
+                jsonrpc_method("stream", model.name, model.version),
+            }:
+                return model
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -210,18 +248,37 @@ def _parse_method(method: str) -> str | None:
     return None
 
 
+def jsonrpc_method(kind: str, name: str, version: str = "1") -> str:
+    """Build a JSON-RPC method, retaining the historical v1 spelling."""
+    suffix = "" if version == "1" else f".v{version}"
+    return f"{kind}.{name}{suffix}"
+
+
 def _decode_json_request(params: dict[str, Any], model: ModelInfo) -> dict[str, Any]:
     """Convert JSON params dict into model function kwargs.
 
     Tensor fields (identified by ``_TensorType`` annotations) are
     converted from base64 JSON dicts to numpy arrays.
     """
+    unknown = params.keys() - model.input_types.keys()
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValidationError(f"Unknown parameter(s): {names}")
+
+    signature = inspect.signature(model.func)
+    missing = [
+        name
+        for name in model.input_types
+        if name not in params
+        and signature.parameters[name].default is inspect.Parameter.empty
+    ]
+    if missing:
+        names = ", ".join(missing)
+        raise ValidationError(f"Missing required parameter(s): {names}")
+
     kwargs: dict[str, Any] = {}
-    for field_name, field_type in model.input_types.items():
-        value = params.get(field_name)
-        if value is None:
-            continue
-        kwargs[field_name] = json_to_python(value, field_type)
+    for field_name, value in params.items():
+        kwargs[field_name] = json_to_python(value, model.input_types[field_name])
     return kwargs
 
 
@@ -234,8 +291,12 @@ def _encode_json_response(result: Any, model: ModelInfo) -> Any:
     if model.output_type is None:
         return None
 
-    if isinstance(result, np.ndarray):
-        return tensor_to_json(result)
+    if isinstance(model.output_type, _TensorType):
+        if not isinstance(result, np.ndarray):
+            raise SerializationError(
+                f"Expected numpy array for tensor output, got {type(result).__name__}"
+            )
+        return tensor_to_json(result, model.output_type)
 
     if isinstance(result, (list, tuple)):
         # Check if elements are numpy arrays

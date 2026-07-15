@@ -6,15 +6,18 @@ the server process automatically.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 from typing import Any
 
+from blazerpc.cli._asyncio import run as run_async
+
 log = logging.getLogger("blazerpc.reload")
 
 
-def _run_server(app_path: str, host: str, port: int) -> None:
+def _run_server(
+    app_path: str, host: str, port: int, http_port: int, transport: str
+) -> None:
     """Entry point for the child process — load and serve."""
     from blazerpc.cli.serve import load_app
 
@@ -23,18 +26,18 @@ def _run_server(app_path: str, host: str, port: int) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    try:
-        import uvloop  # type: ignore[import-untyped]
-
-        uvloop.install()
-    except ImportError:
-        pass
-
     blaze_app = load_app(app_path)
-    asyncio.run(blaze_app.serve(host, port))
+    if transport == "grpc":
+        run_async(blaze_app.serve(host, port))
+    elif transport == "jsonrpc":
+        run_async(blaze_app.serve_jsonrpc(host, http_port))
+    else:
+        run_async(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
 
 
-def run_with_reload(app_path: str, host: str, port: int) -> None:
+def run_with_reload(
+    app_path: str, host: str, port: int, http_port: int, transport: str
+) -> None:
     """Run the server in a subprocess, restarting on file changes.
 
     Requires the ``watchfiles`` package (install with
@@ -54,7 +57,7 @@ def run_with_reload(app_path: str, host: str, port: int) -> None:
     run_process(
         ".",
         target=_run_server,
-        args=(app_path, host, port),
+        args=(app_path, host, port, http_port, transport),
         watch_filter=_python_filter,
     )
 

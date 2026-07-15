@@ -12,6 +12,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator
 
 import numpy as np
@@ -24,12 +25,16 @@ except ImportError as _exc:
         "Install it with:  pip install blazerpc[jsonrpc]"
     ) from _exc
 
-from blazerpc.exceptions import BlazeRPCError
+from blazerpc.exceptions import BlazeRPCError, SerializationError
+from blazerpc.codegen.jsonrpc_handler import jsonrpc_method
 from blazerpc.runtime.json_serialization import (
     is_tensor_json,
+    python_to_json,
     tensor_from_json,
     tensor_to_json,
 )
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.types import _TensorType
 
 
 class JsonRpcClient:
@@ -39,8 +44,9 @@ class JsonRpcClient:
     a ``registry`` parameter — JSON is self-describing.
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, registry: ModelRegistry | None = None) -> None:
         self._url = url.rstrip("/")
+        self._registry = registry
         self._session: aiohttp.ClientSession | None = None
         self._req_id = 0
 
@@ -57,68 +63,114 @@ class JsonRpcClient:
     # Public API
     # ------------------------------------------------------------------
 
-    async def predict(self, model_name: str, **kwargs: Any) -> Any:
+    async def predict(self, endpoint: str | None = None, /, **kwargs: Any) -> Any:
         """Make a unary JSON-RPC prediction call.
 
         Numpy arrays in *kwargs* are auto-converted to tensor dicts.
         Tensor dicts in the response are auto-converted back to numpy arrays.
         """
-        params = _prepare_params(kwargs)
+        model_name = _resolve_model_name(endpoint, kwargs)
+        return await self.predict_version(model_name, "1", **kwargs)
+
+    async def predict_version(
+        self, model_name: str, version: str, /, **kwargs: Any
+    ) -> Any:
+        """Make a unary call to an explicit model version."""
+        model = self._get_model(model_name, version)
+        params = _prepare_params(kwargs, model)
         payload = {
             "jsonrpc": "2.0",
-            "method": f"predict.{model_name}",
+            "method": jsonrpc_method("predict", model_name, version),
             "params": params,
             "id": self._next_id(),
         }
 
         session = await self._ensure_session()
         async with session.post(self._url, json=payload) as resp:
-            body = await resp.json()
+            try:
+                body = await resp.json()
+            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                resp.raise_for_status()
+                raise
 
-        if "error" in body:
-            err = body["error"]
-            raise BlazeRPCError(f"JSON-RPC error {err['code']}: {err['message']}")
+            if "error" in body:
+                _raise_rpc_error(body["error"])
+            resp.raise_for_status()
 
-        return _restore_result(body.get("result"))
+        return _restore_result(
+            body.get("result"), model.output_type if model is not None else None
+        )
 
-    async def stream(self, model_name: str, **kwargs: Any) -> AsyncIterator[Any]:
+    async def stream(
+        self, endpoint: str | None = None, /, **kwargs: Any
+    ) -> AsyncIterator[Any]:
         """Make a streaming call via the SSE endpoint.
 
         Yields each chunk's result value.
         """
-        params = _prepare_params(kwargs)
+        model_name = _resolve_model_name(endpoint, kwargs)
+        async for item in self.stream_version(model_name, "1", **kwargs):
+            yield item
+
+    async def stream_version(
+        self, model_name: str, version: str, /, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        """Make a streaming call to an explicit model version."""
+        model = self._get_model(model_name, version)
+        params = _prepare_params(kwargs, model)
         payload = {"params": params}
-        url = f"{self._url}/stream/{model_name}"
+        method = jsonrpc_method("stream", model_name, version)
+        url = f"{self._url}/stream/{method.removeprefix('stream.')}"
 
         session = await self._ensure_session()
         async with session.post(url, json=payload) as resp:
+            if resp.status >= 400:
+                try:
+                    body = await resp.json()
+                except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                    resp.raise_for_status()
+                    raise
+                if "error" in body:
+                    _raise_rpc_error(body["error"], prefix="Stream error")
+            resp.raise_for_status()
             buffer = b""
             async for chunk in resp.content.iter_any():
                 buffer += chunk
-                while b"\n\n" in buffer:
-                    event_data, buffer = buffer.split(b"\n\n", 1)
-                    lines = event_data.decode().strip().split("\n")
-
-                    event_type = ""
-                    data_str = ""
-                    for line in lines:
-                        if line.startswith("event: "):
-                            event_type = line[7:]
-                        elif line.startswith("data: "):
-                            data_str = line[6:]
+                while separator := _sse_separator(buffer):
+                    index, length = separator
+                    event_data, buffer = buffer[:index], buffer[index + length :]
+                    event_type, data_str = _parse_sse_event(event_data)
 
                     if event_type == "done":
                         return
                     if event_type == "error":
-                        raise BlazeRPCError(f"Stream error: {data_str}")
+                        _raise_rpc_error(json.loads(data_str), prefix="Stream error")
                     if data_str:
-                        yield _restore_result(json.loads(data_str))
+                        yield _restore_result(
+                            json.loads(data_str),
+                            model.output_type if model is not None else None,
+                        )
+
+            if buffer:
+                event_type, data_str = _parse_sse_event(buffer)
+                if event_type == "error":
+                    _raise_rpc_error(json.loads(data_str), prefix="Stream error")
+                if event_type != "done" and data_str:
+                    yield _restore_result(
+                        json.loads(data_str),
+                        model.output_type if model is not None else None,
+                    )
 
     async def close(self) -> None:
         """Close the underlying HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    def _get_model(self, name: str, version: str) -> ModelInfo | None:
+        if self._registry is None:
+            return None
+        return self._registry.get(name, version)
 
     async def __aenter__(self) -> "JsonRpcClient":
         await self._ensure_session()
@@ -133,19 +185,59 @@ class JsonRpcClient:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_params(kwargs: dict[str, Any]) -> dict[str, Any]:
+def _prepare_params(
+    kwargs: dict[str, Any], model: ModelInfo | None = None
+) -> dict[str, Any]:
     """Auto-convert numpy arrays in kwargs to tensor JSON dicts."""
     result: dict[str, Any] = {}
     for key, value in kwargs.items():
-        if isinstance(value, np.ndarray):
+        type_hint = model.input_types.get(key) if model is not None else None
+        if isinstance(type_hint, _TensorType):
+            result[key] = python_to_json(value, type_hint)
+        elif isinstance(value, np.ndarray):
             result[key] = tensor_to_json(value)
         else:
             result[key] = value
+    if model is not None:
+        for key, type_hint in model.input_types.items():
+            if isinstance(type_hint, _TensorType) and key not in kwargs:
+                raise SerializationError(
+                    f"Missing tensor input '{key}' for model '{model.name}'"
+                )
     return result
 
 
-def _restore_result(value: Any) -> Any:
+def _sse_separator(buffer: bytes) -> tuple[int, int] | None:
+    """Return the earliest complete SSE event boundary in *buffer*."""
+    match = re.search(
+        rb"\r\n\r\n|\r\n\n|\r\n\r|\n\r\n|\n\n|\n\r|\r\r\n|\r\r",
+        buffer,
+    )
+    if match is None:
+        return None
+    return match.start(), match.end() - match.start()
+
+
+def _parse_sse_event(event_data: bytes) -> tuple[str, str]:
+    """Extract the event type and joined data fields from one SSE event."""
+    event_type = ""
+    data_lines: list[str] = []
+    for line in event_data.decode().splitlines():
+        if line.startswith("event:"):
+            event_type = line[6:].removeprefix(" ")
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].removeprefix(" "))
+    return event_type, "\n".join(data_lines)
+
+
+def _restore_result(value: Any, type_hint: Any = None) -> Any:
     """Auto-convert tensor dicts in the response back to numpy arrays."""
+    if isinstance(type_hint, _TensorType):
+        if not isinstance(value, dict):
+            raise SerializationError(
+                f"Expected tensor dict for tensor output, got {type(value).__name__}"
+            )
+        return tensor_from_json(value, type_hint)
     if is_tensor_json(value):
         return tensor_from_json(value)
     if isinstance(value, list):
@@ -153,3 +245,25 @@ def _restore_result(value: Any) -> Any:
             tensor_from_json(item) if is_tensor_json(item) else item for item in value
         ]
     return value
+
+
+def _raise_rpc_error(error: Any, *, prefix: str = "JSON-RPC error") -> None:
+    """Raise a transport error while retaining structured RPC details."""
+    if isinstance(error, dict):
+        if "error" in error:
+            _raise_rpc_error(error["error"], prefix=prefix)
+        code = error.get("code")
+        message = error.get("message", error)
+        if code is not None:
+            raise BlazeRPCError(f"{prefix} {code}: {message}")
+        raise BlazeRPCError(f"{prefix}: {message}")
+    raise BlazeRPCError(f"{prefix}: {error}")
+
+
+def _resolve_model_name(endpoint: str | None, kwargs: dict[str, Any]) -> str:
+    """Resolve a positional endpoint while preserving the legacy keyword form."""
+    if endpoint is None:
+        endpoint = kwargs.pop("model_name", None)
+    if not isinstance(endpoint, str) or not endpoint:
+        raise TypeError("model_name must be provided as a non-empty string")
+    return endpoint

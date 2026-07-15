@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from blazerpc import BlazeApp, Context, Depends
 from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
+from blazerpc.exceptions import ValidationError
 from blazerpc.runtime.json_serialization import tensor_to_json
 from blazerpc.types import TensorInput, TensorOutput
 
@@ -260,3 +262,47 @@ async def test_handle_streaming() -> None:
         )
     ]
     assert chunks == ["hello", "world"]
+
+
+async def test_streaming_tensor_params_are_decoded_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import blazerpc.codegen.jsonrpc_handler as handler_module
+
+    app = BlazeApp(enable_batching=False)
+    app.registry.register("tensor_stream", "1", _tensor_stream_fn, streaming=True)
+    dispatcher = JsonRpcDispatcher(app.registry, app_state=app.state)
+    arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    decode_calls = 0
+    original = handler_module.json_to_python
+
+    def counting_decode(value: object, type_hint: object) -> object:
+        nonlocal decode_calls
+        decode_calls += 1
+        return original(value, type_hint)
+
+    monkeypatch.setattr(handler_module, "json_to_python", counting_decode)
+    params = {"arr": tensor_to_json(arr)}
+    prepared = dispatcher.prepare_streaming("stream.tensor_stream", params)
+    chunks = [
+        chunk
+        async for chunk in dispatcher.handle_streaming(
+            "stream.tensor_stream", params, prepared=prepared
+        )
+    ]
+
+    assert decode_calls == 1
+    assert len(chunks) == 1
+
+
+async def _tensor_stream_fn(
+    arr: TensorInput[np.float32, 3],
+) -> TensorOutput[np.float32, 3]:
+    yield arr
+
+
+async def test_malformed_streaming_method_raises_validation_error() -> None:
+    _, dispatcher = _make_app_and_dispatcher()
+
+    with pytest.raises(ValidationError, match=r"stream\.<model>"):
+        await anext(dispatcher.handle_streaming("predict.echo", {"text": "hello"}))

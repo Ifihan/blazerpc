@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from google.protobuf.descriptor_pb2 import FieldDescriptorProto
+from google.protobuf.descriptor_pool import DescriptorPool
 from grpclib.const import Cardinality
 
 from blazerpc.app import BlazeApp
@@ -11,7 +13,7 @@ from blazerpc.codegen.proto import ProtoGenerator, _sanitize_name, _type_to_prot
 from blazerpc.codegen.proto_types import build_message_classes
 from blazerpc.codegen.servicer import InferenceServicer, build_servicer
 from blazerpc.context import Context, Depends
-from blazerpc.types import TensorInput, TensorOutput, _TensorType
+from blazerpc.types import TensorInput, TensorOutput
 
 
 # ---------------------------------------------------------------------------
@@ -76,9 +78,8 @@ class TestTypeToProtoField:
         assert repeated is False
 
     def test_unknown_type(self) -> None:
-        proto_type, repeated = _type_to_proto_field(object)
-        assert proto_type == "bytes"
-        assert repeated is False
+        with pytest.raises(TypeError, match="Unsupported Protobuf annotation"):
+            _type_to_proto_field(object)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +135,7 @@ class TestProtoGenerator:
 
         @app.model("llm", streaming=True)
         def generate(prompt: str) -> str:
-            return "token"
+            yield "token"
 
         proto = ProtoGenerator().generate(app.registry)
         assert "returns (stream LlmResponse);" in proto
@@ -156,13 +157,41 @@ class TestProtoGenerator:
         assert "rpc PredictSentiment" in proto
         assert "rpc PredictClassify" in proto
 
+    def test_generate_multiple_versions_with_distinct_symbols(self) -> None:
+        app = BlazeApp(enable_batching=False)
+
+        @app.model("sentiment")
+        def predict_v1(text: str) -> str:
+            return text
+
+        @app.model("sentiment", version="2")
+        def predict_v2(text: str) -> str:
+            return text
+
+        proto = ProtoGenerator().generate(app.registry)
+        descriptor = ProtoGenerator().generate_file_descriptor(app.registry)
+
+        assert "message SentimentRequest {" in proto
+        assert "message SentimentV2Request {" in proto
+        assert "rpc PredictSentiment(SentimentRequest)" in proto
+        assert "rpc PredictSentimentV2(SentimentV2Request)" in proto
+        assert {method.name for method in descriptor.service[0].method} == {
+            "PredictSentiment",
+            "PredictSentimentV2",
+        }
+        v1_classes = build_message_classes(app.registry.get("sentiment"))
+        v2_classes = build_message_classes(app.registry.get("sentiment", "2"))
+        assert v1_classes[0].__name__ == "SentimentRequest"
+        assert v2_classes[0].__name__ == "SentimentV2Request"
+
     def test_generate_tensor_model(self) -> None:
         app = BlazeApp(enable_batching=False)
 
         @app.model("image")
         def predict(
-            pixels: TensorInput[np.float32, "batch", 224, 224, 3],
-        ) -> TensorOutput[np.float32, "batch", 1000]: ...
+            pixels: TensorInput[np.float32, "batch", 224, 224, 3],  # noqa: F821
+        ) -> TensorOutput[np.float32, "batch", 1000]:  # noqa: F821
+            ...
 
         proto = ProtoGenerator().generate(app.registry)
         assert "TensorProto pixels = 1;" in proto
@@ -178,6 +207,40 @@ class TestProtoGenerator:
         proto = ProtoGenerator().generate(app.registry)
         assert "string text = 1;" in proto
         assert "int64 count = 2;" in proto
+
+    def test_text_proto_and_dynamic_descriptor_are_pool_valid_and_consistent(
+        self,
+    ) -> None:
+        app = BlazeApp(enable_batching=False)
+
+        @app.model("mixed-model", version="2.1")
+        def predict(values: list[int], payload: bytes) -> TensorOutput[np.float32, 2]:
+            return np.ones(2, dtype=np.float32)
+
+        generator = ProtoGenerator()
+        text = generator.generate(app.registry)
+        descriptor = generator.generate_file_descriptor(app.registry)
+        pool = DescriptorPool()
+        pool.AddSerializedFile(descriptor.SerializeToString())
+
+        request = pool.FindMessageTypeByName("blazerpc.MixedModelV2_2e1Request")
+        response = pool.FindMessageTypeByName("blazerpc.MixedModelV2_2e1Response")
+        method = pool.FindMethodByName(
+            "blazerpc.InferenceService.PredictMixedModelV2_2e1"
+        )
+
+        assert [
+            (field.name, field.type, field.is_repeated) for field in request.fields
+        ] == [
+            ("values", FieldDescriptorProto.TYPE_INT64, True),
+            ("payload", FieldDescriptorProto.TYPE_BYTES, False),
+        ]
+        assert response.fields[0].message_type.full_name == "blazerpc.TensorProto"
+        assert method.input_type is request
+        assert method.output_type is response
+        assert "repeated int64 values = 1;" in text
+        assert "bytes payload = 2;" in text
+        assert "TensorProto result = 1;" in text
 
     def test_generate_excludes_context_and_depends(self) -> None:
         """Context and Depends params must not appear in .proto fields."""
@@ -284,7 +347,7 @@ class TestInferenceServicer:
 
         @app.model("llm", streaming=True)
         def generate(prompt: str) -> str:
-            return "token"
+            yield "token"
 
         servicer = build_servicer(app.registry)
         mapping = servicer.__mapping__()

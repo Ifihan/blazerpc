@@ -7,10 +7,13 @@ from typing import Any, AsyncIterator
 from grpclib.client import Channel
 from grpclib.const import Cardinality
 
-from blazerpc.codegen.proto import _sanitize_name
-from blazerpc.codegen.proto_types import build_message_classes
-from blazerpc.runtime.registry import ModelRegistry
+from blazerpc.codegen.proto import _rpc_name_for
+from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
+from blazerpc.exceptions import SerializationError
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.runtime.serialization import TensorProto, proto_to_python, python_to_proto
 from blazerpc.server.grpc import RawCodec
+from blazerpc.types import _TensorType
 
 SERVICE_NAME = "blazerpc.InferenceService"
 
@@ -55,8 +58,8 @@ class BlazeClient:
             self._channel.close()
             self._channel = None
 
-    async def predict(self, model_name: str, **kwargs: Any) -> Any:
-        """Make a unary prediction call to a model.
+    async def predict(self, endpoint: str | None = None, /, **kwargs: Any) -> Any:
+        """Make a unary prediction call to version 1 of a model.
 
         Parameters
         ----------
@@ -69,22 +72,32 @@ class BlazeClient:
         -------
         The model's return value, unwrapped from the Protobuf response.
         """
+        model_name = _resolve_model_name(endpoint, kwargs)
+        return await self.predict_version(model_name, "1", **kwargs)
+
+    async def predict_version(
+        self, model_name: str, model_version: str, /, **kwargs: Any
+    ) -> Any:
+        """Make a unary prediction call to an explicit model version."""
         channel = self._ensure_channel()
-        path = _build_path(model_name)
-        request_cls, response_cls = self._get_message_classes(model_name)
+        path = _build_path(model_name, model_version)
+        model = self._get_model(model_name, model_version)
+        request_cls, response_cls = build_message_classes(model)
 
-        request_bytes = bytes(request_cls(**kwargs))
+        request_bytes = bytes(request_cls(**_encode_kwargs(kwargs, model)))
 
-        stream = channel.request(path, Cardinality.UNARY_UNARY, None, None)
+        stream = channel.request(path, Cardinality.UNARY_UNARY, bytes, bytes)
         async with stream as s:
             await s.send_message(request_bytes, end=True)
             response_bytes = await s.recv_message()
 
         response_msg = response_cls().parse(response_bytes)
-        return response_msg.result  # type: ignore[union-attr]
+        return _decode_result(response_msg.result, model)
 
-    async def stream(self, model_name: str, **kwargs: Any) -> AsyncIterator[Any]:
-        """Make a server-streaming call to a model.
+    async def stream(
+        self, endpoint: str | None = None, /, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        """Make a server-streaming call to version 1 of a model.
 
         Parameters
         ----------
@@ -97,33 +110,95 @@ class BlazeClient:
         ------
         Each chunk's unwrapped result value.
         """
+        model_name = _resolve_model_name(endpoint, kwargs)
+        async for result in self.stream_version(model_name, "1", **kwargs):
+            yield result
+
+    async def stream_version(
+        self, model_name: str, model_version: str, /, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        """Make a server-streaming call to an explicit model version."""
         channel = self._ensure_channel()
-        path = _build_path(model_name)
-        request_cls, response_cls = self._get_message_classes(model_name)
+        path = _build_path(model_name, model_version)
+        model = self._get_model(model_name, model_version)
+        request_cls, response_cls = build_message_classes(model)
 
-        request_bytes = bytes(request_cls(**kwargs))
+        request_bytes = bytes(request_cls(**_encode_kwargs(kwargs, model)))
 
-        stream = channel.request(path, Cardinality.UNARY_STREAM, None, None)
+        stream = channel.request(path, Cardinality.UNARY_STREAM, bytes, bytes)
         async with stream as s:
             await s.send_message(request_bytes, end=True)
             async for response_bytes in s:
                 response_msg = response_cls().parse(response_bytes)
-                yield response_msg.result  # type: ignore[union-attr]
+                yield _decode_result(response_msg.result, model)
 
-    def _get_message_classes(self, model_name: str) -> tuple[type, type]:
-        """Return ``(RequestClass, ResponseClass)`` for *model_name*.
-
-        Requires that a ``registry`` was supplied at construction time.
-        """
+    def _get_model(self, model_name: str, version: str = "1") -> ModelInfo:
         if self._registry is None:
             raise RuntimeError(
                 "BlazeClient requires a 'registry' to build Protobuf message classes. "
                 "Pass registry=app.registry when constructing BlazeClient."
             )
-        model = self._registry.get(model_name)
-        return build_message_classes(model)
+        return self._registry.get(model_name, version)
+
+    def _get_message_classes(
+        self, model_name: str, version: str = "1"
+    ) -> tuple[type, type]:
+        """Return ``(RequestClass, ResponseClass)`` for *model_name*.
+
+        Requires that a ``registry`` was supplied at construction time.
+        """
+        return build_message_classes(self._get_model(model_name, version))
 
 
-def _build_path(model_name: str) -> str:
+def _encode_kwargs(kwargs: dict[str, Any], model: ModelInfo) -> dict[str, Any]:
+    """Convert annotated tensor inputs to their dynamic BetterProto messages."""
+    encoded = dict(kwargs)
+    for field_name, type_hint in model.input_types.items():
+        if not isinstance(type_hint, _TensorType):
+            continue
+        if field_name not in kwargs:
+            raise SerializationError(
+                f"Missing tensor input '{field_name}' for model '{model.name}'"
+            )
+        try:
+            tensor = python_to_proto(kwargs[field_name], type_hint)
+        except SerializationError as exc:
+            raise SerializationError(
+                f"Invalid tensor input '{field_name}' for model '{model.name}': {exc}",
+                dtype=exc.dtype,
+            ) from exc
+        encoded[field_name] = _TensorProtoMsg(
+            shape=list(tensor.shape), dtype=tensor.dtype, data=tensor.data
+        )
+    return encoded
+
+
+def _decode_result(result: Any, model: ModelInfo) -> Any:
+    """Convert an annotated tensor response to numpy, preserving other values."""
+    if not isinstance(model.output_type, _TensorType):
+        return result
+
+    tensor = TensorProto(
+        shape=tuple(result.shape), dtype=result.dtype, data=result.data
+    )
+    try:
+        return proto_to_python(tensor, model.output_type)
+    except SerializationError as exc:
+        raise SerializationError(
+            f"Invalid tensor output from model '{model.name}': {exc}",
+            dtype=exc.dtype,
+        ) from exc
+
+
+def _build_path(model_name: str, version: str = "1") -> str:
     """Build the gRPC method path for a model name."""
-    return f"/{SERVICE_NAME}/Predict{_sanitize_name(model_name)}"
+    return f"/{SERVICE_NAME}/{_rpc_name_for(model_name, version)}"
+
+
+def _resolve_model_name(endpoint: str | None, kwargs: dict[str, Any]) -> str:
+    """Resolve a positional endpoint while preserving the legacy keyword form."""
+    if endpoint is None:
+        endpoint = kwargs.pop("model_name", None)
+    if not isinstance(endpoint, str) or not endpoint:
+        raise TypeError("model_name must be provided as a non-empty string")
+    return endpoint

@@ -156,7 +156,8 @@ First stable release of BlazeRPC.
   types: `str`, `int`, `float`, `bool`, `bytes`, `list[T]`, `TensorInput`,
   and `TensorOutput`.
 - `TensorInput` and `TensorOutput` generic types for declaring tensor shapes
-  and dtypes (e.g. `TensorInput[np.float32, "batch", 224, 224, 3]`).
+  and dtypes (e.g. `TensorInput[np.float32, tuple[Literal["batch"],
+  Literal[224], Literal[224], Literal[3]]]`).
 - Exception hierarchy: `BlazeRPCError`, `ValidationError`,
   `ModelNotFoundError`, `SerializationError`, `InferenceError`, and
   `ConfigurationError`.

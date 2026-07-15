@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from blazerpc import BlazeApp, Context, Depends
+import numpy as np
+
+from blazerpc import BlazeApp, Context, Depends, TensorInput, TensorOutput
 from blazerpc.codegen.invoke import resolve_deps
 from blazerpc.context import AppState
 from blazerpc.types import extract_type_info
@@ -264,17 +266,16 @@ def test_app_state_accepts_attributes() -> None:
 
 async def test_batching_skipped_for_model_with_deps() -> None:
     """Models using Context/Depends should not get a batcher assigned."""
-    from blazerpc.app import _make_batch_inference_fn
-    from blazerpc.runtime.batcher import Batcher
-
     app = BlazeApp(enable_batching=True, max_batch_size=4)
 
     def get_value(ctx: Context) -> int:
         return 42
 
     @app.model("plain")
-    def plain(a: float, b: float) -> float:
-        return a + b
+    def plain(
+        values: TensorInput[np.float32, "batch", 1],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 1]:  # noqa: F821
+        return values
 
     @app.model("with_dep")
     def with_dep(text: str, val: int = Depends(get_value)) -> str:
@@ -284,16 +285,7 @@ async def test_batching_skipped_for_model_with_deps() -> None:
     def with_ctx(ctx: Context, text: str) -> str:
         return text
 
-    # Simulate what app.serve() does to build batchers
-    batchers: dict[str, Batcher] = {}
-    for model in app.registry.list_models():
-        if model.streaming:
-            continue
-        if model.dep_params or model.context_params:
-            continue
-        batcher = Batcher(app.max_batch_size, app.batch_timeout_ms)
-        await batcher.start(_make_batch_inference_fn(model))
-        batchers[model.name] = batcher
+    batchers = await app._create_batchers()
 
     # Only the plain model gets a batcher
     assert "plain" in batchers

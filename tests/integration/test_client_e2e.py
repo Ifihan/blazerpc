@@ -6,6 +6,7 @@ to make real calls over the wire using binary Protobuf encoding.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from grpclib.server import Server
 
@@ -13,6 +14,7 @@ from blazerpc.app import BlazeApp
 from blazerpc.client import BlazeClient
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.server.grpc import RawCodec
+from blazerpc.types import TensorInput, TensorOutput
 
 
 def _get_server_port(server: Server) -> int:
@@ -38,7 +40,7 @@ async def test_client_predict_echo() -> None:
 
     try:
         async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
-            result = await client.predict("echo", text="hello")
+            result = await client.predict(model_name="echo", text="hello")
             assert result == "Echo: hello"
     finally:
         server.close()
@@ -69,6 +71,99 @@ async def test_client_predict_add() -> None:
 
 
 @pytest.mark.asyncio
+async def test_client_routes_multiple_model_versions() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo_v1(text: str) -> str:
+        return f"v1:{text}"
+
+    @app.model("echo", version="2")
+    def echo_v2(text: str) -> str:
+        return f"v2:{text}"
+
+    @app.model("tokens", streaming=True)
+    async def tokens_v1(text: str) -> str:
+        yield f"v1:{text}"
+
+    @app.model("tokens", version="2", streaming=True)
+    async def tokens_v2(text: str) -> str:
+        yield f"v2:{text}"
+
+    servicer = build_servicer(app.registry)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    try:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
+            assert await client.predict("echo", text="one") == "v1:one"
+            assert await client.predict_version("echo", "2", text="two") == "v2:two"
+            assert [chunk async for chunk in client.stream("tokens", text="one")] == [
+                "v1:one"
+            ]
+            assert [
+                chunk
+                async for chunk in client.stream_version("tokens", "2", text="two")
+            ] == ["v2:two"]
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_client_preserves_model_version_request_field() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("describe")
+    def describe(model_version: str) -> str:
+        return f"model:{model_version}"
+
+    servicer = build_servicer(app.registry)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    try:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
+            assert (
+                await client.predict("describe", model_version="canary")
+                == "model:canary"
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_client_predict_tensor_roundtrip() -> None:
+    """BlazeClient converts tensor inputs and outputs across the wire."""
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("double")
+    def double(
+        values: TensorInput[np.float32, 2, 2],
+    ) -> TensorOutput[np.float32, 2, 2]:
+        return values * 2
+
+    servicer = build_servicer(app.registry)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    try:
+        values = np.arange(4, dtype=np.float32).reshape(2, 2)
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
+            result = await client.predict("double", values=values)
+
+        assert isinstance(result, np.ndarray)
+        np.testing.assert_array_equal(result, values * 2)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_client_stream() -> None:
     """BlazeClient.stream() yields chunks from a streaming model."""
     app = BlazeApp(enable_batching=False)
@@ -89,6 +184,38 @@ async def test_client_stream() -> None:
             async for chunk in client.stream("tokens", prompt="hi"):
                 chunks.append(chunk)
             assert chunks == ["hello", " ", "world"]
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_client_stream_tensor_input_and_output() -> None:
+    """BlazeClient converts tensor input and every streamed tensor output."""
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("tensor_chunks", streaming=True)
+    async def tensor_chunks(
+        values: TensorInput[np.int64, 3],
+    ) -> TensorOutput[np.int64, 3]:
+        yield values
+        yield values + 1
+
+    servicer = build_servicer(app.registry)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    try:
+        values = np.array([1, 2, 3], dtype=np.int64)
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
+            chunks = [
+                chunk async for chunk in client.stream("tensor_chunks", values=values)
+            ]
+
+        assert all(isinstance(chunk, np.ndarray) for chunk in chunks)
+        np.testing.assert_array_equal(chunks[0], values)
+        np.testing.assert_array_equal(chunks[1], values + 1)
     finally:
         server.close()
         await server.wait_closed()

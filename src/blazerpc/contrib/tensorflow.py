@@ -8,20 +8,23 @@ automatically.
 from __future__ import annotations
 
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar, cast
 
 import numpy as np
 import tensorflow as tf
+from numpy.typing import NDArray
+
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 
-def tf_to_numpy(tensor: Any) -> np.ndarray:
+def tf_to_numpy(tensor: Any) -> NDArray[Any]:
     """Convert a TensorFlow tensor to a NumPy array."""
     if not isinstance(tensor, tf.Tensor):
         raise TypeError(f"Expected tf.Tensor, got {type(tensor).__name__}")
-    return tensor.numpy()
+    return cast(NDArray[Any], tensor.numpy())
 
 
-def numpy_to_tf(arr: np.ndarray, dtype: Any = None) -> Any:
+def numpy_to_tf(arr: NDArray[Any], dtype: Any = None) -> Any:
     """Convert a NumPy array to a TensorFlow tensor.
 
     Parameters
@@ -38,10 +41,10 @@ def numpy_to_tf(arr: np.ndarray, dtype: Any = None) -> Any:
 
 
 def tf_model(
-    func: Callable | None = None,
+    func: _F | None = None,
     *,
     dtype: Any = None,
-) -> Callable:
+) -> _F | Callable[[_F], _F]:
     """Decorator that auto-converts NumPy inputs to TF tensors and back.
 
     Usage::
@@ -54,7 +57,7 @@ def tf_model(
             # Return value is converted back to np.ndarray automatically
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: _F) -> _F:
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             converted_args = [
@@ -72,7 +75,7 @@ def tf_model(
                 return tf_to_numpy(result)
             return result
 
-        return wrapper
+        return cast(_F, wrapper)
 
     if func is not None:
         return decorator(func)
