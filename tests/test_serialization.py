@@ -13,7 +13,7 @@ from blazerpc.runtime.serialization import (
     python_to_proto,
     serialize_tensor,
 )
-from blazerpc.types import TensorInput, _TensorType
+from blazerpc.types import TensorInput
 
 
 # -- round-trip --

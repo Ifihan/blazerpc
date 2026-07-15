@@ -83,9 +83,7 @@ def test_reload_forwards_transport_and_ports() -> None:
         )
 
     assert result.exit_code == 0
-    run_with_reload.assert_called_once_with(
-        "app:app", "0.0.0.0", 50052, 8081, "both"
-    )
+    run_with_reload.assert_called_once_with("app:app", "0.0.0.0", 50052, 8081, "both")
 
 
 @pytest.mark.parametrize(

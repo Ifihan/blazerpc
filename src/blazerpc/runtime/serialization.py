@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from blazerpc.exceptions import SerializationError
 from blazerpc.types import DTYPE_MAP, _TensorType
@@ -60,7 +61,7 @@ def _validate_shape(shape: Any, itemsize: int, data_length: int) -> tuple[int, .
     return tuple(dimensions)
 
 
-def _validate_contract(arr: np.ndarray, type_hint: _TensorType) -> None:
+def _validate_contract(arr: NDArray[Any], type_hint: _TensorType) -> None:
     expected_dtype = np.dtype(type_hint.dtype)
     if arr.dtype != expected_dtype:
         raise SerializationError(
@@ -87,7 +88,7 @@ def _validate_contract(arr: np.ndarray, type_hint: _TensorType) -> None:
 
 
 def serialize_tensor(
-    arr: np.ndarray, type_hint: _TensorType | None = None
+    arr: NDArray[Any], type_hint: _TensorType | None = None
 ) -> TensorProto:
     """Serialize a numpy array to a TensorProto."""
     if type_hint is not None:
@@ -108,7 +109,7 @@ def serialize_tensor(
 
 def deserialize_tensor(
     proto: TensorProto, type_hint: _TensorType | None = None
-) -> np.ndarray:
+) -> NDArray[Any]:
     """Deserialize a TensorProto back to a numpy array."""
     if not isinstance(proto.data, (bytes, bytearray, memoryview)):
         raise SerializationError("Tensor data must be bytes")

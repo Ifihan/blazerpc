@@ -28,13 +28,9 @@ def _validate_serve_options(
             "must be grpc, jsonrpc, or both", param_hint="--transport"
         )
     if workers != 1:
-        raise typer.BadParameter(
-            "only 1 worker is supported", param_hint="--workers"
-        )
+        raise typer.BadParameter("only 1 worker is supported", param_hint="--workers")
     if not 1 <= port <= 65535:
-        raise typer.BadParameter(
-            "must be between 1 and 65535", param_hint="--port"
-        )
+        raise typer.BadParameter("must be between 1 and 65535", param_hint="--port")
     if not 1 <= http_port <= 65535:
         raise typer.BadParameter(
             "must be between 1 and 65535", param_hint="--http-port"
@@ -80,7 +76,7 @@ def serve(
 
     # Install uvloop when available for better performance.
     try:
-        import uvloop  # type: ignore[import-untyped]
+        import uvloop
 
         uvloop.install()
     except ImportError:

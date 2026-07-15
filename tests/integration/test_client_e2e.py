@@ -91,8 +91,7 @@ async def test_client_routes_multiple_model_versions() -> None:
         async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             assert await client.predict("echo", text="one") == "v1:one"
             assert (
-                await client.predict("echo", model_version="2", text="two")
-                == "v2:two"
+                await client.predict("echo", model_version="2", text="two") == "v2:two"
             )
     finally:
         server.close()
@@ -174,8 +173,7 @@ async def test_client_stream_tensor_input_and_output() -> None:
         values = np.array([1, 2, 3], dtype=np.int64)
         async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
             chunks = [
-                chunk
-                async for chunk in client.stream("tensor_chunks", values=values)
+                chunk async for chunk in client.stream("tensor_chunks", values=values)
             ]
 
         assert all(isinstance(chunk, np.ndarray) for chunk in chunks)

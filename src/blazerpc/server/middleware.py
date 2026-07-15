@@ -21,6 +21,7 @@ import time
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Any
 
 from grpclib.const import Status
 from grpclib.events import RecvRequest, SendTrailingMetadata, listen
@@ -123,7 +124,7 @@ class _MetricsLifecycle(Middleware):
         timing = _RequestTiming(event.method_name, time.perf_counter())
         method_func = event.method_func
 
-        async def wrapped_method(stream: Stream) -> None:
+        async def wrapped_method(stream: Stream[Any, Any]) -> None:
             token = self._current_request.set(timing)
             try:
                 await method_func(stream)

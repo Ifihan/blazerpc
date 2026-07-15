@@ -11,13 +11,21 @@ from grpclib.exceptions import GRPCError
 
 from blazerpc.app import BlazeApp
 from blazerpc.client import _encode_kwargs
-from blazerpc.codegen.jsonrpc_handler import INTERNAL_ERROR, INVALID_PARAMS, JsonRpcDispatcher
+from blazerpc.codegen.jsonrpc_handler import (
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    JsonRpcDispatcher,
+)
 from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
 from blazerpc.codegen.servicer import _make_unary_handler
 from blazerpc.exceptions import SerializationError, ValidationError
 from blazerpc.jsonrpc_client import _prepare_params, _restore_result
 from blazerpc.runtime.json_serialization import tensor_from_json, tensor_to_json
-from blazerpc.runtime.serialization import TensorProto, deserialize_tensor, serialize_tensor
+from blazerpc.runtime.serialization import (
+    TensorProto,
+    deserialize_tensor,
+    serialize_tensor,
+)
 from blazerpc.types import TensorInput, TensorOutput
 
 
@@ -123,9 +131,7 @@ async def test_grpc_maps_input_and_output_contract_failures() -> None:
 
     wrong_dtype = np.ones(2, dtype=np.float64)
     bad_request = request_cls(
-        value=_TensorProtoMsg(
-            shape=[2], dtype="double", data=wrong_dtype.tobytes()
-        )
+        value=_TensorProtoMsg(shape=[2], dtype="double", data=wrong_dtype.tobytes())
     )
     with pytest.raises(GRPCError) as input_error:
         await handler(_FakeStream(bytes(bad_request)))
@@ -154,9 +160,7 @@ async def test_grpc_maps_input_and_output_contract_failures() -> None:
     )
     square_value = np.ones((2, 2), dtype=np.float32)
     square_request = square_request_cls(
-        value=_TensorProtoMsg(
-            shape=[2, 2], dtype="float", data=square_value.tobytes()
-        )
+        value=_TensorProtoMsg(shape=[2, 2], dtype="float", data=square_value.tobytes())
     )
     stream = _FakeStream(bytes(square_request))
     await square_handler(stream)

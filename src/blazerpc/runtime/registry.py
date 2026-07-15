@@ -122,6 +122,8 @@ class ModelRegistry:
                 )
 
         type_info = extract_type_info(func)
+        if type_info["output"] is type(None):
+            type_info["output"] = None
         tensor_types = [
             hint
             for hint in (*type_info["inputs"].values(), type_info["output"])

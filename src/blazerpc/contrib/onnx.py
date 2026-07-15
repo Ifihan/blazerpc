@@ -8,10 +8,10 @@ with BlazeRPC's model registration.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import numpy as np
 import onnxruntime as ort
+from numpy.typing import NDArray
 
 
 class ONNXModel:
@@ -62,7 +62,7 @@ class ONNXModel:
         """Names of the model's output tensors."""
         return list(self._output_names)
 
-    def predict(self, *inputs: np.ndarray) -> list[np.ndarray]:
+    def predict(self, *inputs: NDArray[Any]) -> list[NDArray[Any]]:
         """Run inference on the given input arrays.
 
         Positional arguments are matched to input names in order.
@@ -75,9 +75,9 @@ class ONNXModel:
             )
 
         feed = dict(zip(self._input_names, inputs))
-        return self._session.run(self._output_names, feed)
+        return cast(list[NDArray[Any]], self._session.run(self._output_names, feed))
 
-    def predict_dict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    def predict_dict(self, inputs: dict[str, NDArray[Any]]) -> dict[str, NDArray[Any]]:
         """Run inference with named inputs, returning named outputs."""
         results = self._session.run(self._output_names, inputs)
         return dict(zip(self._output_names, results))

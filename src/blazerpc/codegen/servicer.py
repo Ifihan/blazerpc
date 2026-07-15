@@ -177,7 +177,9 @@ def _make_streaming_handler(
             try:
                 response_bytes = _encode_response(chunk, model, response_cls)
             except SerializationError as exc:
-                raise GRPCError(Status.INTERNAL, f"Invalid model output: {exc}") from exc
+                raise GRPCError(
+                    Status.INTERNAL, f"Invalid model output: {exc}"
+                ) from exc
             await stream.send_message(response_bytes)
 
     return _handler

@@ -27,9 +27,7 @@ class _FakeServer:
         self.stopped = False
         self.handle_signals: bool | None = None
 
-    async def start(
-        self, host: str, port: int, *, handle_signals: bool = True
-    ) -> None:
+    async def start(self, host: str, port: int, *, handle_signals: bool = True) -> None:
         self.handle_signals = handle_signals
         self.started.set()
         await self.shutdown.wait()
@@ -81,6 +79,7 @@ async def test_jsonrpc_middleware_is_wired_to_both_transport_modes(
     app.jsonrpc_middleware = [middleware]
 
     jsonrpc_task = asyncio.create_task(app.serve_jsonrpc())
+
     async def wait_for_jsonrpc() -> None:
         while not _FakeJsonRpcServer.instances:
             await asyncio.sleep(0)
@@ -206,9 +205,7 @@ async def test_serve_both_cleans_up_after_startup_failure(
     )
 
     with pytest.raises(RuntimeError, match="failed to bind"):
-        await asyncio.wait_for(
-            _make_app().serve_both(), timeout=1
-        )
+        await asyncio.wait_for(_make_app().serve_both(), timeout=1)
 
     grpc = FailingGrpcServer.instances[0]
     jsonrpc = _FakeJsonRpcServer.instances[0]

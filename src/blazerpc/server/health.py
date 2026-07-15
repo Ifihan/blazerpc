@@ -23,6 +23,6 @@ def build_health_service(
     if servicers:
         # Map each servicer → empty check list (always SERVING unless
         # custom checks are added later).
-        checks = {s: [] for s in servicers}
+        checks: dict[Any, list[Any]] = {s: [] for s in servicers}
         return Health(checks)
     return Health()

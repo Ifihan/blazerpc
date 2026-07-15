@@ -31,7 +31,7 @@ class RawCodec(CodecBase):
     __content_subtype__ = "proto"
 
     def encode(self, message: Any, message_type: Any) -> bytes:
-        if message_type is None:
+        if message_type is None or message_type is bytes:
             if not isinstance(message, bytes):
                 raise TypeError("Raw messages must be bytes")
             return bytes(message)
@@ -39,10 +39,10 @@ class RawCodec(CodecBase):
             raise TypeError(
                 f"Message must be of type {message_type!r}, not {type(message)!r}"
             )
-        return message.SerializeToString()
+        return bytes(message.SerializeToString())
 
     def decode(self, data: bytes, message_type: Any) -> Any:
-        if message_type is None:
+        if message_type is None or message_type is bytes:
             return data
         return message_type.FromString(data)
 

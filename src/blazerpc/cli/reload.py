@@ -26,7 +26,7 @@ def _run_server(
     )
 
     try:
-        import uvloop  # type: ignore[import-untyped]
+        import uvloop
 
         uvloop.install()
     except ImportError:
@@ -38,9 +38,7 @@ def _run_server(
     elif transport == "jsonrpc":
         asyncio.run(blaze_app.serve_jsonrpc(host, http_port))
     else:
-        asyncio.run(
-            blaze_app.serve_both(host, grpc_port=port, http_port=http_port)
-        )
+        asyncio.run(blaze_app.serve_both(host, grpc_port=port, http_port=http_port))
 
 
 def run_with_reload(

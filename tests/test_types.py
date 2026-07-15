@@ -95,8 +95,8 @@ def test_extract_type_info_multiple_params() -> None:
 
 def test_extract_type_info_tensor_types() -> None:
     def predict(
-        x: TensorInput[np.float32, "batch", 224, 224, 3],
-    ) -> TensorOutput[np.float32, "batch", 1000]:
+        x: TensorInput[np.float32, "batch", 224, 224, 3],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 1000]:  # noqa: F821
         ...
 
     info = extract_type_info(predict)

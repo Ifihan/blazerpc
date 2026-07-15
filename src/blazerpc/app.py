@@ -6,9 +6,10 @@ import asyncio
 import logging
 import math
 import signal
-from typing import Any, Callable, get_origin
+from typing import Any, Awaitable, Callable, TypeVar, cast, get_origin
 
 import numpy as np
+from numpy.typing import NDArray
 
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import AppState
@@ -21,6 +22,8 @@ from blazerpc.server.reflection import build_reflection_service
 from blazerpc.types import _TensorType
 
 log = logging.getLogger("blazerpc")
+
+_F = TypeVar("_F", bound=Callable[..., object])
 
 
 async def _stop_lifecycle_resources(
@@ -45,14 +48,16 @@ def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
 
     async def inference_fn(batch: list[dict[str, Any]]) -> list[Any]:
         batch_sizes: list[int] = []
-        combined: dict[str, np.ndarray] = {}
+        combined: dict[str, NDArray[Any]] = {}
 
         for request in batch:
             request_size: int | None = None
             for name in model.input_types:
                 value = request[name]
                 if not isinstance(value, np.ndarray) or value.ndim == 0:
-                    raise ValueError(f"Batched input '{name}' must be a non-scalar array")
+                    raise ValueError(
+                        f"Batched input '{name}' must be a non-scalar array"
+                    )
                 if request_size is None:
                     request_size = value.shape[0]
                 elif value.shape[0] != request_size:
@@ -80,7 +85,8 @@ def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
             combined[name] = np.concatenate(values, axis=0)
 
         if is_async:
-            result = await model.func(**combined)
+            async_func = cast(Callable[..., Awaitable[Any]], model.func)
+            result = await async_func(**combined)
         else:
             result = await asyncio.to_thread(model.func, **combined)
 
@@ -173,10 +179,10 @@ class BlazeApp:
         name: str,
         version: str = "1",
         streaming: bool = False,
-    ) -> Callable:
+    ) -> Callable[[_F], _F]:
         """Decorator to register a model endpoint."""
 
-        def decorator(func: Callable) -> Callable:
+        def decorator(func: _F) -> _F:
             self.registry.register(name, version, func, streaming)
             return func
 
@@ -212,7 +218,9 @@ class BlazeApp:
         except BaseException:
             cleanup_error = await _stop_lifecycle_resources([], batchers)
             if cleanup_error is not None:
-                _log_cleanup_error("Cleanup failed after batcher startup failure", cleanup_error)
+                _log_cleanup_error(
+                    "Cleanup failed after batcher startup failure", cleanup_error
+                )
             raise
         return batchers
 
@@ -364,4 +372,6 @@ class BlazeApp:
             if cleanup_error is not None:
                 if failure is None:
                     raise cleanup_error
-                _log_cleanup_error("Cleanup failed after server startup failure", cleanup_error)
+                _log_cleanup_error(
+                    "Cleanup failed after server startup failure", cleanup_error
+                )

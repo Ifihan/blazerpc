@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from blazerpc.app import BlazeApp
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.server.health import build_health_service

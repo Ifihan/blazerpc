@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Generic, TypeVar, get_type_hints
+from typing import Any, Callable, Generic, TypeVar
 
 import numpy as np
 
@@ -97,7 +97,7 @@ def extract_type_info(func: Callable[..., Any]) -> dict[str, Any]:
     """
     from blazerpc.context import Context, Depends  # local import avoids circular
 
-    hints = get_type_hints(func)
+    hints = inspect.get_annotations(func, eval_str=True)
     sig = inspect.signature(func)
 
     inputs: dict[str, Any] = {}
@@ -116,6 +116,8 @@ def extract_type_info(func: Callable[..., Any]) -> dict[str, Any]:
             inputs[name] = annotation
 
     output = hints.get("return")
+    if output is None and "return" in hints:
+        output = type(None)
 
     return {
         "inputs": inputs,

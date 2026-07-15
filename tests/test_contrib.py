@@ -16,7 +16,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from blazerpc.contrib.pytorch import numpy_to_torch, torch_model, torch_to_numpy
+from blazerpc.contrib.pytorch import (  # noqa: E402
+    numpy_to_torch,
+    torch_model,
+    torch_to_numpy,
+)
 
 
 class TestPyTorch:

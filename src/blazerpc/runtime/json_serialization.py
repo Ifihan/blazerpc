@@ -11,6 +11,7 @@ import binascii
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from blazerpc.exceptions import SerializationError
 from blazerpc.runtime.serialization import _PROTO_TO_NUMPY
@@ -18,7 +19,7 @@ from blazerpc.types import _TensorType
 
 
 def tensor_to_json(
-    arr: np.ndarray, type_hint: _TensorType | None = None
+    arr: NDArray[Any], type_hint: _TensorType | None = None
 ) -> dict[str, Any]:
     """Serialize a numpy array to a JSON-safe dict.
 
@@ -36,7 +37,7 @@ def tensor_to_json(
 
 def tensor_from_json(
     obj: dict[str, Any], type_hint: _TensorType | None = None
-) -> np.ndarray:
+) -> NDArray[Any]:
     """Deserialize a JSON tensor dict back to a numpy array."""
     if not isinstance(obj, dict):
         raise SerializationError("Tensor JSON must be an object")

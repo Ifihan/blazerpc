@@ -81,7 +81,7 @@ class BlazeClient:
 
         request_bytes = bytes(request_cls(**_encode_kwargs(kwargs, model)))
 
-        stream = channel.request(path, Cardinality.UNARY_UNARY, None, None)
+        stream = channel.request(path, Cardinality.UNARY_UNARY, bytes, bytes)
         async with stream as s:
             await s.send_message(request_bytes, end=True)
             response_bytes = await s.recv_message()
@@ -112,7 +112,7 @@ class BlazeClient:
 
         request_bytes = bytes(request_cls(**_encode_kwargs(kwargs, model)))
 
-        stream = channel.request(path, Cardinality.UNARY_STREAM, None, None)
+        stream = channel.request(path, Cardinality.UNARY_STREAM, bytes, bytes)
         async with stream as s:
             await s.send_message(request_bytes, end=True)
             async for response_bytes in s:

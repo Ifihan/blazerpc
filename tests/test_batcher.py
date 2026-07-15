@@ -38,9 +38,7 @@ async def test_multiple_items_batched() -> None:
     await batcher.start(inference_fn)
 
     # Submit 4 requests concurrently.
-    tasks = [
-        asyncio.create_task(batcher.submit({"v": i})) for i in range(4)
-    ]
+    tasks = [asyncio.create_task(batcher.submit({"v": i})) for i in range(4)]
     results = await asyncio.gather(*tasks)
     assert sorted(results) == [1, 2, 3, 4]
     # They should have been batched together (or at most 2 batches).
@@ -61,9 +59,7 @@ async def test_batch_respects_max_size() -> None:
 
     await batcher.start(inference_fn)
 
-    tasks = [
-        asyncio.create_task(batcher.submit({"i": i})) for i in range(6)
-    ]
+    tasks = [asyncio.create_task(batcher.submit({"i": i})) for i in range(6)]
     await asyncio.gather(*tasks)
 
     for bs in batch_sizes:
@@ -126,9 +122,7 @@ async def test_batch_size_mismatch() -> None:
 
     await batcher.start(wrong_size_fn)
 
-    tasks = [
-        asyncio.create_task(batcher.submit({"x": i})) for i in range(3)
-    ]
+    tasks = [asyncio.create_task(batcher.submit({"x": i})) for i in range(3)]
     # Give time for the batch to be processed.
     await asyncio.sleep(0.2)
 
