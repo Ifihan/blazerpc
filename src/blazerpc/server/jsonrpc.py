@@ -61,10 +61,11 @@ class JsonRpcServer:
         app.router.add_post("/jsonrpc/stream/{method:.+}", self._handle_sse)
         app.router.add_get("/health", self._handle_health)
 
-        self._runner = web.AppRunner(app)
         loop = asyncio.get_running_loop()
         installed_signals: list[signal.Signals] = []
+        failure: BaseException | None = None
         try:
+            self._runner = web.AppRunner(app, shutdown_timeout=self._grace_period)
             await self._runner.setup()
             site = web.TCPSite(self._runner, host, port)
             await site.start()
@@ -80,22 +81,34 @@ class JsonRpcServer:
                     installed_signals.append(sig)
 
             await self._shutdown_event.wait()
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             for sig in installed_signals:
                 try:
                     loop.remove_signal_handler(sig)
                 except (NotImplementedError, RuntimeError):
                     pass
-            await self.stop()
+            try:
+                await self.stop()
+            except BaseException:
+                if failure is None:
+                    raise
+                log.exception("Cleanup failed after JSON-RPC server failure")
 
     async def stop(self) -> None:
         """Gracefully shut down the server."""
         self._shutdown_event.set()
-        if self._runner is None:
+        runner = self._runner
+        if runner is None:
             return
-        log.info("Shutting down JSON-RPC server (grace %.1fs)…", self._grace_period)
-        await self._runner.cleanup()
         self._runner = None
+        log.info("Shutting down JSON-RPC server (grace %.1fs)…", self._grace_period)
+        try:
+            await asyncio.wait_for(runner.cleanup(), timeout=self._grace_period)
+        except asyncio.TimeoutError:
+            log.warning("JSON-RPC grace period expired, forcing shutdown")
 
     def _signal_shutdown(self) -> None:
         log.info("Received shutdown signal")

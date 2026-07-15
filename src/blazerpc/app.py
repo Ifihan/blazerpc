@@ -23,6 +23,22 @@ from blazerpc.types import _TensorType
 log = logging.getLogger("blazerpc")
 
 
+async def _stop_lifecycle_resources(
+    servers: list[Any], batchers: dict[str, Batcher]
+) -> BaseException | None:
+    results = await asyncio.gather(
+        *(server.stop() for server in servers),
+        *(batcher.stop() for batcher in batchers.values()),
+        return_exceptions=True,
+    )
+    errors = [result for result in results if isinstance(result, BaseException)]
+    return errors[0] if errors else None
+
+
+def _log_cleanup_error(message: str, error: BaseException) -> None:
+    log.error(message, exc_info=(type(error), error, error.__traceback__))
+
+
 def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
     """Create an inference function that combines tensor requests on axis zero."""
     is_async = asyncio.iscoroutinefunction(model.func)
@@ -191,11 +207,12 @@ class BlazeApp:
                 batcher = Batcher(
                     self.max_batch_size, self.batch_timeout_ms, self.max_queue_size
                 )
-                await batcher.start(_make_batch_inference_fn(model_info))
                 batchers[batcher_key(model_info.name, model_info.version)] = batcher
+                await batcher.start(_make_batch_inference_fn(model_info))
         except BaseException:
-            for batcher in batchers.values():
-                await batcher.stop()
+            cleanup_error = await _stop_lifecycle_resources([], batchers)
+            if cleanup_error is not None:
+                _log_cleanup_error("Cleanup failed after batcher startup failure", cleanup_error)
             raise
         return batchers
 
@@ -205,23 +222,31 @@ class BlazeApp:
 
     async def serve(self, host: str = "0.0.0.0", port: int = 50051) -> None:
         """Start the gRPC server and block until shutdown."""
-        batchers = await self._create_batchers()
-
-        servicer = build_servicer(
-            self.registry, batchers=batchers, app_state=self.state
-        )
-
-        health = build_health_service([servicer])
-        reflection_handlers = build_reflection_service([servicer])
-
-        handlers = [servicer, health, *reflection_handlers]
-        server = GRPCServer(handlers, middleware=self.middleware)
-
+        batchers: dict[str, Batcher] = {}
+        servers: list[Any] = []
+        failure: BaseException | None = None
         try:
+            batchers = await self._create_batchers()
+            servicer = build_servicer(
+                self.registry, batchers=batchers, app_state=self.state
+            )
+            health = build_health_service([servicer])
+            reflection_handlers = build_reflection_service([servicer])
+            handlers = [servicer, health, *reflection_handlers]
+            server = GRPCServer(handlers, middleware=self.middleware)
+            servers.append(server)
             await server.start(host, port)
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            for batcher in batchers.values():
-                await batcher.stop()
+            cleanup_error = await _stop_lifecycle_resources(servers, batchers)
+            if cleanup_error is not None:
+                if failure is None:
+                    raise cleanup_error
+                _log_cleanup_error(
+                    "Cleanup failed after gRPC startup failure", cleanup_error
+                )
 
     # ------------------------------------------------------------------
     # JSON-RPC transport
@@ -232,17 +257,28 @@ class BlazeApp:
         from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
         from blazerpc.server.jsonrpc import JsonRpcServer
 
-        batchers = await self._create_batchers()
-        dispatcher = JsonRpcDispatcher(
-            self.registry, batchers=batchers, app_state=self.state
-        )
-        server = JsonRpcServer(dispatcher, middleware=self.jsonrpc_middleware)
-
+        batchers: dict[str, Batcher] = {}
+        servers: list[Any] = []
+        failure: BaseException | None = None
         try:
+            batchers = await self._create_batchers()
+            dispatcher = JsonRpcDispatcher(
+                self.registry, batchers=batchers, app_state=self.state
+            )
+            server = JsonRpcServer(dispatcher, middleware=self.jsonrpc_middleware)
+            servers.append(server)
             await server.start(host, port)
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            for batcher in batchers.values():
-                await batcher.stop()
+            cleanup_error = await _stop_lifecycle_resources(servers, batchers)
+            if cleanup_error is not None:
+                if failure is None:
+                    raise cleanup_error
+                _log_cleanup_error(
+                    "Cleanup failed after JSON-RPC startup failure", cleanup_error
+                )
 
     # ------------------------------------------------------------------
     # Both transports
@@ -258,40 +294,45 @@ class BlazeApp:
         from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
         from blazerpc.server.jsonrpc import JsonRpcServer
 
-        batchers = await self._create_batchers()
-
-        # gRPC
-        servicer = build_servicer(
-            self.registry, batchers=batchers, app_state=self.state
-        )
-        health = build_health_service([servicer])
-        reflection_handlers = build_reflection_service([servicer])
-        handlers = [servicer, health, *reflection_handlers]
-        grpc_server = GRPCServer(handlers, middleware=self.middleware)
-
-        # JSON-RPC
-        dispatcher = JsonRpcDispatcher(
-            self.registry, batchers=batchers, app_state=self.state
-        )
-        jsonrpc_server = JsonRpcServer(
-            dispatcher, middleware=self.jsonrpc_middleware
-        )
-
         loop = asyncio.get_running_loop()
         shutdown_event = asyncio.Event()
+        batchers: dict[str, Batcher] = {}
+        servers: list[Any] = []
         installed_signals: list[signal.Signals] = []
-        server_tasks = [
-            asyncio.create_task(
-                grpc_server.start(host, grpc_port, handle_signals=False)
-            ),
-            asyncio.create_task(
-                jsonrpc_server.start(host, http_port, handle_signals=False)
-            ),
-        ]
-        shutdown_task = asyncio.create_task(shutdown_event.wait())
-        all_tasks: list[asyncio.Task[Any]] = [*server_tasks, shutdown_task]
-
+        server_tasks: list[asyncio.Task[Any]] = []
+        all_tasks: list[asyncio.Task[Any]] = []
+        failure: BaseException | None = None
         try:
+            batchers = await self._create_batchers()
+
+            servicer = build_servicer(
+                self.registry, batchers=batchers, app_state=self.state
+            )
+            health = build_health_service([servicer])
+            reflection_handlers = build_reflection_service([servicer])
+            handlers = [servicer, health, *reflection_handlers]
+            grpc_server = GRPCServer(handlers, middleware=self.middleware)
+            servers.append(grpc_server)
+
+            dispatcher = JsonRpcDispatcher(
+                self.registry, batchers=batchers, app_state=self.state
+            )
+            jsonrpc_server = JsonRpcServer(
+                dispatcher, middleware=self.jsonrpc_middleware
+            )
+            servers.append(jsonrpc_server)
+
+            server_tasks = [
+                asyncio.create_task(
+                    grpc_server.start(host, grpc_port, handle_signals=False)
+                ),
+                asyncio.create_task(
+                    jsonrpc_server.start(host, http_port, handle_signals=False)
+                ),
+            ]
+            shutdown_task = asyncio.create_task(shutdown_event.wait())
+            all_tasks = [*server_tasks, shutdown_task]
+
             for sig in (signal.SIGINT, signal.SIGTERM):
                 try:
                     loop.add_signal_handler(sig, shutdown_event.set)
@@ -306,20 +347,21 @@ class BlazeApp:
             for task in server_tasks:
                 if task in done:
                     task.result()
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            await asyncio.gather(
-                grpc_server.stop(),
-                jsonrpc_server.stop(),
-                return_exceptions=True,
-            )
             for task in all_tasks:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*all_tasks, return_exceptions=True)
+            cleanup_error = await _stop_lifecycle_resources(servers, batchers)
             for sig in installed_signals:
                 try:
                     loop.remove_signal_handler(sig)
                 except (NotImplementedError, RuntimeError):
                     pass
-            for batcher in batchers.values():
-                await batcher.stop()
+            if cleanup_error is not None:
+                if failure is None:
+                    raise cleanup_error
+                _log_cleanup_error("Cleanup failed after server startup failure", cleanup_error)

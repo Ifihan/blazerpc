@@ -72,12 +72,13 @@ class GRPCServer:
     ) -> None:
         """Start serving and block until shutdown is requested."""
         self._shutdown_event.clear()
-        self._server = Server(self._handlers, codec=RawCodec())
-        for mw in self._middleware:
-            mw.attach(self._server)
         loop = asyncio.get_running_loop()
         installed_signals: list[signal.Signals] = []
+        failure: BaseException | None = None
         try:
+            self._server = Server(self._handlers, codec=RawCodec())
+            for mw in self._middleware:
+                mw.attach(self._server)
             await self._server.start(host, port)
             log.info("Server listening on %s:%d", host, port)
 
@@ -90,29 +91,38 @@ class GRPCServer:
                     installed_signals.append(sig)
 
             await self._shutdown_event.wait()
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             for sig in installed_signals:
                 try:
                     loop.remove_signal_handler(sig)
                 except (NotImplementedError, RuntimeError):
                     pass
-            await self.stop()
+            try:
+                await self.stop()
+            except BaseException:
+                if failure is None:
+                    raise
+                log.exception("Cleanup failed after gRPC server failure")
 
     async def stop(self) -> None:
         """Gracefully shut down the server."""
         self._shutdown_event.set()
-        if self._server is None:
+        server = self._server
+        if server is None:
             return
+        self._server = None
         log.info("Shutting down (grace period %.1fs)…", self._grace_period)
-        self._server.close()
+        server.close()
         try:
             await asyncio.wait_for(
-                self._server.wait_closed(),
+                server.wait_closed(),
                 timeout=self._grace_period,
             )
         except asyncio.TimeoutError:
             log.warning("Grace period expired, forcing shutdown")
-        self._server = None
 
     def _signal_shutdown(self) -> None:
         log.info("Received shutdown signal")
