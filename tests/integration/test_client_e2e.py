@@ -71,6 +71,35 @@ async def test_client_predict_add() -> None:
 
 
 @pytest.mark.asyncio
+async def test_client_routes_multiple_model_versions() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo_v1(text: str) -> str:
+        return f"v1:{text}"
+
+    @app.model("echo", version="2")
+    def echo_v2(text: str) -> str:
+        return f"v2:{text}"
+
+    servicer = build_servicer(app.registry)
+    server = Server([servicer], codec=RawCodec())
+    await server.start("127.0.0.1", 0)
+    port = _get_server_port(server)
+
+    try:
+        async with BlazeClient("127.0.0.1", port, registry=app.registry) as client:
+            assert await client.predict("echo", text="one") == "v1:one"
+            assert (
+                await client.predict("echo", model_version="2", text="two")
+                == "v2:two"
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_client_predict_tensor_roundtrip() -> None:
     """BlazeClient converts tensor inputs and outputs across the wire."""
     app = BlazeApp(enable_batching=False)

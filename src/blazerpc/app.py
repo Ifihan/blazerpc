@@ -13,7 +13,7 @@ import numpy as np
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import AppState
 from blazerpc.runtime.batcher import Batcher
-from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
 from blazerpc.server.grpc import GRPCServer
 from blazerpc.server.health import build_health_service
 from blazerpc.server.middleware import Middleware
@@ -173,23 +173,28 @@ class BlazeApp:
         batchers: dict[str, Batcher] = {}
         if not self.enable_batching:
             return batchers
-        for model_info in self.registry.list_models():
-            if model_info.streaming:
-                continue
-            if model_info.dep_params or model_info.context_params:
-                log.warning(
-                    "Model '%s' uses Context/Depends — skipping batcher "
-                    "(batching is not compatible with dependency injection)",
-                    model_info.name,
+        try:
+            for model_info in self.registry.list_models():
+                if model_info.streaming:
+                    continue
+                if model_info.dep_params or model_info.context_params:
+                    log.warning(
+                        "Model '%s' uses Context/Depends — skipping batcher "
+                        "(batching is not compatible with dependency injection)",
+                        model_info.name,
+                    )
+                    continue
+                if not _supports_adaptive_batching(model_info):
+                    continue
+                batcher = Batcher(
+                    self.max_batch_size, self.batch_timeout_ms, self.max_queue_size
                 )
-                continue
-            if not _supports_adaptive_batching(model_info):
-                continue
-            batcher = Batcher(
-                self.max_batch_size, self.batch_timeout_ms, self.max_queue_size
-            )
-            await batcher.start(_make_batch_inference_fn(model_info))
-            batchers[model_info.name] = batcher
+                await batcher.start(_make_batch_inference_fn(model_info))
+                batchers[batcher_key(model_info.name, model_info.version)] = batcher
+        except BaseException:
+            for batcher in batchers.values():
+                await batcher.stop()
+            raise
         return batchers
 
     # ------------------------------------------------------------------

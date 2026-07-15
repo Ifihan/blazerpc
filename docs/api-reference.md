@@ -36,7 +36,7 @@ Decorator that registers a function as a model endpoint.
 | Parameter   | Type   | Default  | Description                                    |
 | ----------- | ------ | -------- | ---------------------------------------------- |
 | `name`      | `str`  | required | Model name. Becomes part of the RPC method name (`PredictName`). |
-| `version`   | `str`  | `"1"`    | Model version string.                          |
+| `version`   | `str`  | `"1"`    | Model version used in transport routing. See [version routing](configuration.md#appmodel-decorator). |
 | `streaming` | `bool` | `False`  | If `True`, the function must be an async generator that yields responses. |
 
 ```python
@@ -169,22 +169,24 @@ async with BlazeClient("127.0.0.1", 50051, registry=app.registry) as client:
 | `port`     | `int`                   | `50051`       | Server port.                                                                |
 | `registry` | `ModelRegistry \| None` | `None`        | Model registry used to build Protobuf message classes. Required for `predict` and `stream`. Pass `app.registry`. |
 
-### `await client.predict(model_name, **kwargs)`
+### `await client.predict(model_name, model_version="1", **kwargs)`
 
 Make a unary prediction call. Returns the model's result value, deserialized from the Protobuf response.
 
 | Parameter    | Type  | Description                                    |
 | ------------ | ----- | ---------------------------------------------- |
 | `model_name` | `str` | The registered model name.                     |
+| `version`    | `str` | Model version. Version `"1"` preserves the unversioned wire path. |
 | `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
 
-### `async for chunk in client.stream(model_name, **kwargs)`
+### `async for chunk in client.stream(model_name, model_version="1", **kwargs)`
 
 Make a server-streaming call. Yields each chunk's result value, deserialized from Protobuf.
 
 | Parameter    | Type  | Description                                    |
 | ------------ | ----- | ---------------------------------------------- |
 | `model_name` | `str` | The registered model name.                     |
+| `version`    | `str` | Model version.                                 |
 | `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
 
 ### `client.close()`
@@ -215,22 +217,24 @@ Requires `aiohttp`: `pip install blazerpc[jsonrpc]`.
 | --------- | ----- | -------- | ------------------------------------ |
 | `url`     | `str` | required | JSON-RPC endpoint URL (e.g. `"http://localhost:8080/jsonrpc"`). |
 
-### `await client.predict(model_name, **kwargs)`
+### `await client.predict(model_name, model_version="1", **kwargs)`
 
 Make a unary JSON-RPC prediction call. NumPy arrays in kwargs are auto-converted to base64 tensor dicts. Tensor dicts in the response are auto-converted back to NumPy arrays.
 
 | Parameter    | Type  | Description                                    |
 | ------------ | ----- | ---------------------------------------------- |
 | `model_name` | `str` | The registered model name.                     |
+| `version`    | `str` | Model version; non-v1 calls use `.v<version>` method suffixes. |
 | `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
 
-### `async for chunk in client.stream(model_name, **kwargs)`
+### `async for chunk in client.stream(model_name, model_version="1", **kwargs)`
 
 Make a streaming call via the SSE endpoint. Yields each chunk's result value.
 
 | Parameter    | Type  | Description                                    |
 | ------------ | ----- | ---------------------------------------------- |
 | `model_name` | `str` | The registered model name.                     |
+| `version`    | `str` | Model version.                                 |
 | `**kwargs`   | `Any` | Input fields matching the model's parameters.  |
 
 ### `client.close()`

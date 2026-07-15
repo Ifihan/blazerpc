@@ -25,6 +25,7 @@ except ImportError as _exc:
     ) from _exc
 
 from blazerpc.exceptions import BlazeRPCError
+from blazerpc.codegen.jsonrpc_handler import jsonrpc_method
 from blazerpc.runtime.json_serialization import (
     is_tensor_json,
     tensor_from_json,
@@ -57,7 +58,9 @@ class JsonRpcClient:
     # Public API
     # ------------------------------------------------------------------
 
-    async def predict(self, model_name: str, **kwargs: Any) -> Any:
+    async def predict(
+        self, model_name: str, model_version: str = "1", **kwargs: Any
+    ) -> Any:
         """Make a unary JSON-RPC prediction call.
 
         Numpy arrays in *kwargs* are auto-converted to tensor dicts.
@@ -66,7 +69,7 @@ class JsonRpcClient:
         params = _prepare_params(kwargs)
         payload = {
             "jsonrpc": "2.0",
-            "method": f"predict.{model_name}",
+            "method": jsonrpc_method("predict", model_name, model_version),
             "params": params,
             "id": self._next_id(),
         }
@@ -81,14 +84,17 @@ class JsonRpcClient:
 
         return _restore_result(body.get("result"))
 
-    async def stream(self, model_name: str, **kwargs: Any) -> AsyncIterator[Any]:
+    async def stream(
+        self, model_name: str, model_version: str = "1", **kwargs: Any
+    ) -> AsyncIterator[Any]:
         """Make a streaming call via the SSE endpoint.
 
         Yields each chunk's result value.
         """
         params = _prepare_params(kwargs)
         payload = {"params": params}
-        url = f"{self._url}/stream/{model_name}"
+        method = jsonrpc_method("stream", model_name, model_version)
+        url = f"{self._url}/stream/{method.removeprefix('stream.')}"
 
         session = await self._ensure_session()
         async with session.post(url, json=payload) as resp:

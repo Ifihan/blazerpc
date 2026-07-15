@@ -9,7 +9,7 @@ import pytest
 
 from blazerpc import TensorInput, TensorOutput
 from blazerpc.app import BlazeApp, _make_batch_inference_fn
-from blazerpc.exceptions import ModelNotFoundError
+from blazerpc.exceptions import ModelNotFoundError, ValidationError
 from blazerpc.codegen.invoke import invoke_model
 from blazerpc.server.middleware import LoggingMiddleware
 
@@ -51,6 +51,31 @@ def test_model_decorator_stores_type_info(app: BlazeApp) -> None:
 def test_model_not_found(app: BlazeApp) -> None:
     with pytest.raises(ModelNotFoundError):
         app.registry.get("nonexistent")
+
+
+def test_exact_duplicate_model_registration_is_rejected(app: BlazeApp) -> None:
+    @app.model("echo", version="2")
+    def echo_v2(text: str) -> str:
+        return text
+
+    with pytest.raises(ValidationError, match="already registered"):
+
+        @app.model("echo", version="2")
+        def replacement(text: str) -> str:
+            return text.upper()
+
+
+def test_multiple_model_versions_are_registered_separately(app: BlazeApp) -> None:
+    @app.model("echo")
+    def echo_v1(text: str) -> str:
+        return text
+
+    @app.model("echo", version="2")
+    def echo_v2(text: str) -> str:
+        return text.upper()
+
+    assert app.registry.get("echo").func is echo_v1
+    assert app.registry.get("echo", "2").func is echo_v2
 
 
 def test_app_accepts_middleware() -> None:
@@ -152,3 +177,30 @@ async def test_scalar_endpoint_executes_directly_without_batcher_delay() -> None
     assert batchers == {}
     assert result == 5.0
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_batchers_are_keyed_and_cleaned_up_per_model_version() -> None:
+    app = BlazeApp()
+
+    @app.model("double")
+    def double_v1(
+        values: TensorInput[np.float32, "batch", 1],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 1]:  # noqa: F821
+        return values * 2
+
+    @app.model("double", version="2")
+    def double_v2(
+        values: TensorInput[np.float32, "batch", 1],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 1]:  # noqa: F821
+        return values * 3
+
+    batchers = await app._create_batchers()
+    assert set(batchers) == {"double", "double:v2"}
+    assert batchers["double"] is not batchers["double:v2"]
+    tasks = [batcher._task for batcher in batchers.values()]
+
+    for batcher in batchers.values():
+        await batcher.stop()
+
+    assert all(task is not None and task.done() for task in tasks)

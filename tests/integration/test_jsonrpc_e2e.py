@@ -88,6 +88,29 @@ async def test_add_model_e2e() -> None:
         await server.stop()
 
 
+async def test_client_routes_multiple_model_versions() -> None:
+    app = BlazeApp(enable_batching=False)
+
+    @app.model("echo")
+    def echo_v1(text: str) -> str:
+        return f"v1:{text}"
+
+    @app.model("echo", version="2")
+    def echo_v2(text: str) -> str:
+        return f"v2:{text}"
+
+    server, port = await _start_test_server(app)
+    try:
+        async with JsonRpcClient(f"http://127.0.0.1:{port}/jsonrpc") as client:
+            assert await client.predict("echo", text="one") == "v1:one"
+            assert (
+                await client.predict("echo", model_version="2", text="two")
+                == "v2:two"
+            )
+    finally:
+        await server.stop()
+
+
 async def test_tensor_model_e2e() -> None:
     app = BlazeApp(enable_batching=False)
 

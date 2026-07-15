@@ -156,6 +156,33 @@ class TestProtoGenerator:
         assert "rpc PredictSentiment" in proto
         assert "rpc PredictClassify" in proto
 
+    def test_generate_multiple_versions_with_distinct_symbols(self) -> None:
+        app = BlazeApp(enable_batching=False)
+
+        @app.model("sentiment")
+        def predict_v1(text: str) -> str:
+            return text
+
+        @app.model("sentiment", version="2")
+        def predict_v2(text: str) -> str:
+            return text
+
+        proto = ProtoGenerator().generate(app.registry)
+        descriptor = ProtoGenerator().generate_file_descriptor(app.registry)
+
+        assert "message SentimentRequest {" in proto
+        assert "message SentimentV2Request {" in proto
+        assert "rpc PredictSentiment(SentimentRequest)" in proto
+        assert "rpc PredictSentimentV2(SentimentV2Request)" in proto
+        assert {method.name for method in descriptor.service[0].method} == {
+            "PredictSentiment",
+            "PredictSentimentV2",
+        }
+        v1_classes = build_message_classes(app.registry.get("sentiment"))
+        v2_classes = build_message_classes(app.registry.get("sentiment", "2"))
+        assert v1_classes[0].__name__ == "SentimentRequest"
+        assert v2_classes[0].__name__ == "SentimentV2Request"
+
     def test_generate_tensor_model(self) -> None:
         app = BlazeApp(enable_batching=False)
 

@@ -24,6 +24,10 @@ def test_build_path_hyphen() -> None:
     assert _build_path("my-model") == "/blazerpc.InferenceService/PredictMyModel"
 
 
+def test_build_path_versioned() -> None:
+    assert _build_path("echo", "2") == "/blazerpc.InferenceService/PredictEchoV2"
+
+
 def test_client_defaults() -> None:
     client = BlazeClient()
     assert client._host == "127.0.0.1"

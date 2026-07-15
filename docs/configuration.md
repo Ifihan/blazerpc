@@ -40,8 +40,16 @@ def predict_sentiment(text: list[str]) -> list[float]:
 | Parameter   | Type   | Default  | Description                                                          |
 | ----------- | ------ | -------- | -------------------------------------------------------------------- |
 | `name`      | `str`  | required | Model name. Converted to PascalCase for the RPC method name (e.g. `"sentiment"` becomes `PredictSentiment`). |
-| `version`   | `str`  | `"1"`    | Model version string. Stored as metadata; does not affect routing.   |
+| `version`   | `str`  | `"1"`    | Model version. Starts with an ASCII letter or digit and may also contain `.`, `_`, or `-`. |
 | `streaming` | `bool` | `False`  | If `True`, the function must be an async generator that yields responses. Produces a `returns (stream Response)` RPC. |
+
+Version `"1"` keeps the original wire names: `PredictSentiment`,
+`SentimentRequest`, and `predict.sentiment`. Other versions append `V<version>`
+to gRPC methods and message names and `.v<version>` to JSON-RPC methods. Proto
+identifiers hex-escape punctuation, so version `"2.0"` has suffix `V2_2e0`.
+For example, version `"2"` uses `PredictSentimentV2`, `SentimentV2Request`, and
+`predict.sentiment.v2`. Registering the same model name and version twice is an
+error; different versions may coexist.
 
 ## `JsonRpcServer` constructor
 

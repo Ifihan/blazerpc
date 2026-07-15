@@ -6,6 +6,7 @@ injection, and error mapping.
 
 Method naming convention:
     - ``predict.<model_name>`` — unary model call
+    - ``predict.<model_name>.v<version>`` — non-v1 unary model call
     - ``stream.<model_name>`` — server-streaming (must use the SSE endpoint)
 """
 
@@ -24,7 +25,7 @@ from blazerpc.exceptions import (
     ValidationError,
 )
 from blazerpc.runtime.json_serialization import json_to_python, tensor_to_json
-from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
 
 log = logging.getLogger("blazerpc.jsonrpc")
 
@@ -92,20 +93,12 @@ class JsonRpcDispatcher:
             return _error_response(req_id, INVALID_PARAMS, "params must be an object")
 
         # Parse method name
-        model_name = _parse_method(method)
-        if model_name is None:
+        model = self._resolve_method(method)
+        if model is None:
             return _error_response(
                 req_id,
                 METHOD_NOT_FOUND,
                 f"Unknown method: {method}. Use predict.<model> or stream.<model>",
-            )
-
-        # Look up model
-        try:
-            model = self._registry.get(model_name)
-        except (ModelNotFoundError, KeyError):
-            return _error_response(
-                req_id, METHOD_NOT_FOUND, f"Model not found: {model_name}"
             )
 
         # Streaming models cannot be called on the unary endpoint
@@ -113,7 +106,7 @@ class JsonRpcDispatcher:
             return _error_response(
                 req_id,
                 INVALID_REQUEST,
-                f"Streaming model '{model_name}' must use the SSE endpoint",
+                f"Streaming model '{model.name}' must use the SSE endpoint",
             )
 
         # Decode params → model kwargs
@@ -132,7 +125,7 @@ class JsonRpcDispatcher:
 
         # Execute
         try:
-            batcher = self._batchers.get(model.name)
+            batcher = self._batchers.get(batcher_key(model.name, model.version))
             raw_result = await invoke_model(model, kwargs, batcher=batcher)
         except InferenceError as exc:
             return _error_response(req_id, INTERNAL_ERROR, str(exc))
@@ -171,13 +164,10 @@ class JsonRpcDispatcher:
         headers: dict[str, str] | None = None,
     ) -> AsyncIterator[Any]:
         """Yield chunks from a streaming model for SSE delivery."""
-        model_name = _parse_method(method)
-        if model_name is None:
-            raise ModelNotFoundError(
-                f"Unknown method: {method}", name=method, version=""
-            )
+        model = self._resolve_method(method)
+        if model is None:
+            raise ModelNotFoundError(method, "")
 
-        model = self._registry.get(model_name)
         kwargs = _decode_json_request(params, model)
 
         _has_deps = bool(model.dep_params or model.context_params)
@@ -189,6 +179,14 @@ class JsonRpcDispatcher:
 
         async for chunk in invoke_streaming_model(model, kwargs):
             yield _encode_json_response(chunk, model)
+
+    def _resolve_method(self, method: str) -> ModelInfo | None:
+        """Resolve an exact versioned method without discarding its version."""
+        for model in self._registry.list_models():
+            prefix = "stream" if model.streaming else "predict"
+            if method == jsonrpc_method(prefix, model.name, model.version):
+                return model
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +206,12 @@ def _parse_method(method: str) -> str | None:
             if name:
                 return name
     return None
+
+
+def jsonrpc_method(kind: str, name: str, version: str = "1") -> str:
+    """Build a JSON-RPC method, retaining the historical v1 spelling."""
+    suffix = "" if version == "1" else f".v{version}"
+    return f"{kind}.{name}{suffix}"
 
 
 def _decode_json_request(params: dict[str, Any], model: ModelInfo) -> dict[str, Any]:

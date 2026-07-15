@@ -17,12 +17,12 @@ from grpclib.const import Cardinality, Handler
 from grpclib.server import Stream
 
 from blazerpc.codegen.invoke import invoke_model, invoke_streaming_model, resolve_deps
-from blazerpc.codegen.proto import ProtoGenerator, _sanitize_name
+from blazerpc.codegen.proto import ProtoGenerator, _rpc_name
 from blazerpc.codegen.proto_types import (
     _TensorProtoMsg,
     build_message_classes,
 )
-from blazerpc.runtime.registry import ModelInfo, ModelRegistry
+from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
 from blazerpc.runtime.serialization import deserialize_tensor, serialize_tensor
 from blazerpc.types import _TensorType
 
@@ -60,7 +60,7 @@ class InferenceServicer:
     def __mapping__(self) -> dict[str, Handler]:
         mapping: dict[str, Handler] = {}
         for model in self._registry.list_models():
-            rpc_name = f"Predict{_sanitize_name(model.name)}"
+            rpc_name = _rpc_name(model)
             path = f"/{self.SERVICE_NAME}/{rpc_name}"
 
             request_cls, response_cls = build_message_classes(model)
@@ -75,7 +75,7 @@ class InferenceServicer:
                 )
                 cardinality = Cardinality.UNARY_STREAM
             else:
-                batcher = self._batchers.get(model.name)
+                batcher = self._batchers.get(batcher_key(model.name, model.version))
                 handler_fn = _make_unary_handler(
                     model,
                     request_cls,

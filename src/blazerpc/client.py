@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator
 from grpclib.client import Channel
 from grpclib.const import Cardinality
 
-from blazerpc.codegen.proto import _sanitize_name
+from blazerpc.codegen.proto import _rpc_name_for
 from blazerpc.codegen.proto_types import _TensorProtoMsg, build_message_classes
 from blazerpc.exceptions import SerializationError
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry
@@ -58,7 +58,9 @@ class BlazeClient:
             self._channel.close()
             self._channel = None
 
-    async def predict(self, model_name: str, **kwargs: Any) -> Any:
+    async def predict(
+        self, model_name: str, model_version: str = "1", **kwargs: Any
+    ) -> Any:
         """Make a unary prediction call to a model.
 
         Parameters
@@ -73,8 +75,8 @@ class BlazeClient:
         The model's return value, unwrapped from the Protobuf response.
         """
         channel = self._ensure_channel()
-        path = _build_path(model_name)
-        model = self._get_model(model_name)
+        path = _build_path(model_name, model_version)
+        model = self._get_model(model_name, model_version)
         request_cls, response_cls = build_message_classes(model)
 
         request_bytes = bytes(request_cls(**_encode_kwargs(kwargs, model)))
@@ -87,7 +89,9 @@ class BlazeClient:
         response_msg = response_cls().parse(response_bytes)
         return _decode_result(response_msg.result, model)
 
-    async def stream(self, model_name: str, **kwargs: Any) -> AsyncIterator[Any]:
+    async def stream(
+        self, model_name: str, model_version: str = "1", **kwargs: Any
+    ) -> AsyncIterator[Any]:
         """Make a server-streaming call to a model.
 
         Parameters
@@ -102,8 +106,8 @@ class BlazeClient:
         Each chunk's unwrapped result value.
         """
         channel = self._ensure_channel()
-        path = _build_path(model_name)
-        model = self._get_model(model_name)
+        path = _build_path(model_name, model_version)
+        model = self._get_model(model_name, model_version)
         request_cls, response_cls = build_message_classes(model)
 
         request_bytes = bytes(request_cls(**_encode_kwargs(kwargs, model)))
@@ -115,20 +119,22 @@ class BlazeClient:
                 response_msg = response_cls().parse(response_bytes)
                 yield _decode_result(response_msg.result, model)
 
-    def _get_model(self, model_name: str) -> ModelInfo:
+    def _get_model(self, model_name: str, version: str = "1") -> ModelInfo:
         if self._registry is None:
             raise RuntimeError(
                 "BlazeClient requires a 'registry' to build Protobuf message classes. "
                 "Pass registry=app.registry when constructing BlazeClient."
             )
-        return self._registry.get(model_name)
+        return self._registry.get(model_name, version)
 
-    def _get_message_classes(self, model_name: str) -> tuple[type, type]:
+    def _get_message_classes(
+        self, model_name: str, version: str = "1"
+    ) -> tuple[type, type]:
         """Return ``(RequestClass, ResponseClass)`` for *model_name*.
 
         Requires that a ``registry`` was supplied at construction time.
         """
-        return build_message_classes(self._get_model(model_name))
+        return build_message_classes(self._get_model(model_name, version))
 
 
 def _encode_kwargs(kwargs: dict[str, Any], model: ModelInfo) -> dict[str, Any]:
@@ -171,6 +177,6 @@ def _decode_result(result: Any, model: ModelInfo) -> Any:
         ) from exc
 
 
-def _build_path(model_name: str) -> str:
+def _build_path(model_name: str, version: str = "1") -> str:
     """Build the gRPC method path for a model name."""
-    return f"/{SERVICE_NAME}/Predict{_sanitize_name(model_name)}"
+    return f"/{SERVICE_NAME}/{_rpc_name_for(model_name, version)}"

@@ -15,6 +15,29 @@ def _sanitize_name(name: str) -> str:
     return "".join(part.capitalize() for part in name.replace("-", "_").split("_"))
 
 
+def _version_suffix(version: str) -> str:
+    """Return an injective proto-identifier suffix for a non-v1 version."""
+    if version == "1":
+        return ""
+    encoded = "".join(
+        chr(byte) if chr(byte).isalnum() and byte < 128 else f"_{byte:02x}"
+        for byte in version.encode("utf-8")
+    )
+    return f"V{encoded}"
+
+
+def _model_proto_name(model: ModelInfo) -> str:
+    return f"{_sanitize_name(model.name)}{_version_suffix(model.version)}"
+
+
+def _rpc_name_for(name: str, version: str = "1") -> str:
+    return f"Predict{_sanitize_name(name)}{_version_suffix(version)}"
+
+
+def _rpc_name(model: ModelInfo) -> str:
+    return _rpc_name_for(model.name, model.version)
+
+
 def _type_to_proto_field(py_type: Any) -> tuple[str, bool]:
     """Map a Python type annotation to a proto field type.
 
@@ -84,7 +107,7 @@ class ProtoGenerator:
 
         service = file_proto.service.add(name="InferenceService")
         for model in registry.list_models():
-            name = _sanitize_name(model.name)
+            name = _model_proto_name(model)
             request = file_proto.message_type.add(name=f"{name}Request")
             for number, (field_name, field_type) in enumerate(
                 model.input_types.items(), start=1
@@ -102,7 +125,7 @@ class ProtoGenerator:
                 )
 
             method = service.method.add(
-                name=f"Predict{name}",
+                name=_rpc_name(model),
                 input_type=f".blazerpc.{name}Request",
                 output_type=f".blazerpc.{name}Response",
             )
@@ -156,7 +179,7 @@ class ProtoGenerator:
 
     @staticmethod
     def _generate_request_message(model: ModelInfo) -> list[str]:
-        name = _sanitize_name(model.name)
+        name = _model_proto_name(model)
         lines = [f"message {name}Request {{"]
         field_num = 1
         for param_name, param_type in model.input_types.items():
@@ -169,7 +192,7 @@ class ProtoGenerator:
 
     @staticmethod
     def _generate_response_message(model: ModelInfo) -> list[str]:
-        name = _sanitize_name(model.name)
+        name = _model_proto_name(model)
         lines = [f"message {name}Response {{"]
         if model.output_type is not None:
             proto_type, repeated = _type_to_proto_field(model.output_type)
@@ -182,15 +205,15 @@ class ProtoGenerator:
     def _generate_service(models: list[ModelInfo]) -> list[str]:
         lines = ["service InferenceService {"]
         for model in models:
-            name = _sanitize_name(model.name)
+            name = _model_proto_name(model)
             if model.streaming:
                 lines.append(
-                    f"  rpc Predict{name}({name}Request) "
+                    f"  rpc {_rpc_name(model)}({name}Request) "
                     f"returns (stream {name}Response);"
                 )
             else:
                 lines.append(
-                    f"  rpc Predict{name}({name}Request) returns ({name}Response);"
+                    f"  rpc {_rpc_name(model)}({name}Request) returns ({name}Response);"
                 )
         lines += ["}", ""]
         return lines

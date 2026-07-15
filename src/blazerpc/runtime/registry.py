@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Callable
 
 from blazerpc.exceptions import ModelNotFoundError, ValidationError
 from blazerpc.types import extract_type_info
+
+
+_VERSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def model_key(name: str, version: str = "1") -> str:
+    """Return the internal registry key for a model version."""
+    return f"{name}:{version}"
+
+
+def batcher_key(name: str, version: str = "1") -> str:
+    """Return a version-aware batcher key, preserving the v1 key."""
+    return name if version == "1" else f"{name}:v{version}"
 
 
 @dataclass
@@ -32,6 +46,20 @@ class ModelRegistry:
         func: Callable[..., object],
         streaming: bool = False,
     ) -> None:
+        if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+            raise ValidationError(
+                "Model version must start with an ASCII letter or digit and contain "
+                "only ASCII letters, digits, '.', '_', or '-'",
+                field="version",
+            )
+
+        key = model_key(name, version)
+        if key in self.models:
+            raise ValidationError(
+                f"Model '{name}' version '{version}' is already registered",
+                field=name,
+            )
+
         type_info = extract_type_info(func)
         total_params = (
             len(type_info["inputs"])
@@ -45,7 +73,6 @@ class ModelRegistry:
                 field=name,
             )
 
-        key = f"{name}:{version}"
         self.models[key] = ModelInfo(
             name=name,
             version=version,
@@ -58,13 +85,13 @@ class ModelRegistry:
         )
 
     def get(self, name: str, version: str = "1") -> ModelInfo:
-        model = self.models.get(f"{name}:{version}")
+        model = self.models.get(model_key(name, version))
         if model is None:
             raise ModelNotFoundError(name, version)
         return model
 
     def get_or_none(self, name: str, version: str = "1") -> ModelInfo | None:
-        return self.models.get(f"{name}:{version}")
+        return self.models.get(model_key(name, version))
 
     def list_models(self) -> list[ModelInfo]:
         return list(self.models.values())
