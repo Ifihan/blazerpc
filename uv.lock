@@ -305,6 +305,7 @@ all = [
     { name = "tensorflow" },
     { name = "torch" },
     { name = "urllib3" },
+    { name = "watchfiles" },
 ]
 dev = [
     { name = "aiohttp" },
@@ -358,7 +359,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.11.0" },
     { name = "aiohttp", marker = "extra == 'jsonrpc'", specifier = ">=3.11.0" },
     { name = "betterproto", specifier = ">=2.0.0b6" },
-    { name = "blazerpc", extras = ["pytorch", "tensorflow", "onnx", "otel", "jsonrpc"], marker = "extra == 'all'" },
+    { name = "blazerpc", extras = ["pytorch", "tensorflow", "onnx", "otel", "jsonrpc", "reload"], marker = "extra == 'all'" },
     { name = "grpclib", specifier = ">=0.4.7" },
     { name = "idna", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "idna", marker = "extra == 'jsonrpc'", specifier = ">=3.7" },
