@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import numpy as np
 import pytest
 
-from blazerpc.app import BlazeApp
+from blazerpc import TensorInput, TensorOutput
+from blazerpc.app import BlazeApp, _make_batch_inference_fn
 from blazerpc.exceptions import ModelNotFoundError
+from blazerpc.codegen.invoke import invoke_model
 from blazerpc.server.middleware import LoggingMiddleware
 
 
@@ -78,3 +83,72 @@ def test_app_rejects_invalid_batch_configuration(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         BlazeApp(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_tensor_requests_are_combined_into_one_model_call_and_split() -> None:
+    app = BlazeApp()
+    calls: list[tuple[int, ...]] = []
+
+    @app.model("double")
+    def double(
+        values: TensorInput[np.float32, "batch", 2],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 2]:  # noqa: F821
+        calls.append(values.shape)
+        return values * 2
+
+    inference_fn = _make_batch_inference_fn(app.registry.get("double"))
+    results = await inference_fn(
+        [
+            {"values": np.array([[1, 2]], dtype=np.float32)},
+            {"values": np.array([[3, 4], [5, 6]], dtype=np.float32)},
+        ]
+    )
+
+    assert calls == [(3, 2)]
+    np.testing.assert_array_equal(results[0], [[2, 4]])
+    np.testing.assert_array_equal(results[1], [[6, 8], [10, 12]])
+
+
+@pytest.mark.asyncio
+async def test_tensor_requests_split_list_output_by_leading_dimension() -> None:
+    app = BlazeApp()
+
+    @app.model("labels")
+    def labels(
+        values: TensorInput[np.float32, "batch", 1],  # noqa: F821
+    ) -> list[int]:
+        return [int(value) for value in values[:, 0]]
+
+    inference_fn = _make_batch_inference_fn(app.registry.get("labels"))
+    results = await inference_fn(
+        [
+            {"values": np.array([[1], [2]], dtype=np.float32)},
+            {"values": np.array([[3]], dtype=np.float32)},
+        ]
+    )
+
+    assert results == [[1, 2], [3]]
+
+
+@pytest.mark.asyncio
+async def test_scalar_endpoint_executes_directly_without_batcher_delay() -> None:
+    app = BlazeApp(batch_timeout_ms=10_000)
+    calls = 0
+
+    @app.model("add")
+    def add(a: float, b: float) -> float:
+        nonlocal calls
+        calls += 1
+        return a + b
+
+    batchers = await app._create_batchers()
+    model = app.registry.get("add")
+    result = await asyncio.wait_for(
+        invoke_model(model, {"a": 2.0, "b": 3.0}, batcher=batchers.get("add")),
+        timeout=0.5,
+    )
+
+    assert batchers == {}
+    assert result == 5.0
+    assert calls == 1

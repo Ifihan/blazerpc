@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any, Callable
+from typing import Any, Callable, get_origin
+
+import numpy as np
 
 from blazerpc.codegen.servicer import build_servicer
 from blazerpc.context import AppState
@@ -15,24 +17,94 @@ from blazerpc.server.grpc import GRPCServer
 from blazerpc.server.health import build_health_service
 from blazerpc.server.middleware import Middleware
 from blazerpc.server.reflection import build_reflection_service
+from blazerpc.types import _TensorType
 
 log = logging.getLogger("blazerpc")
 
 
 def _make_batch_inference_fn(model: ModelInfo) -> Callable[..., Any]:
-    """Create an inference function that processes a batch by calling the model per-item."""
+    """Create an inference function that combines tensor requests on axis zero."""
     is_async = asyncio.iscoroutinefunction(model.func)
 
     async def inference_fn(batch: list[dict[str, Any]]) -> list[Any]:
-        results: list[Any] = []
-        for kwargs in batch:
-            if is_async:
-                results.append(await model.func(**kwargs))
-            else:
-                results.append(await asyncio.to_thread(model.func, **kwargs))
-        return results
+        batch_sizes: list[int] = []
+        combined: dict[str, np.ndarray] = {}
+
+        for request in batch:
+            request_size: int | None = None
+            for name in model.input_types:
+                value = request[name]
+                if not isinstance(value, np.ndarray) or value.ndim == 0:
+                    raise ValueError(f"Batched input '{name}' must be a non-scalar array")
+                if request_size is None:
+                    request_size = value.shape[0]
+                elif value.shape[0] != request_size:
+                    raise ValueError(
+                        "All tensor inputs in a request must have the same "
+                        "leading dimension"
+                    )
+            if request_size is None:
+                raise ValueError("A tensor batch must contain at least one input")
+            batch_sizes.append(request_size)
+
+        for name in model.input_types:
+            values = [request[name] for request in batch]
+            first = values[0]
+            if any(
+                value.ndim != first.ndim
+                or value.shape[1:] != first.shape[1:]
+                or value.dtype != first.dtype
+                for value in values[1:]
+            ):
+                raise ValueError(
+                    f"Batched input '{name}' must have matching rank, trailing "
+                    "dimensions, and dtype"
+                )
+            combined[name] = np.concatenate(values, axis=0)
+
+        if is_async:
+            result = await model.func(**combined)
+        else:
+            result = await asyncio.to_thread(model.func, **combined)
+
+        total_size = sum(batch_sizes)
+        split_points = np.cumsum(batch_sizes[:-1]).tolist()
+        if isinstance(result, np.ndarray):
+            if result.ndim == 0 or result.shape[0] != total_size:
+                raise ValueError(
+                    "Batched tensor output leading dimension must equal the "
+                    "combined input leading dimension"
+                )
+            return list(np.split(result, split_points, axis=0))
+        if isinstance(result, list):
+            if len(result) != total_size:
+                raise ValueError(
+                    "Batched list output length must equal the combined input "
+                    "leading dimension"
+                )
+            boundaries = [0, *split_points, total_size]
+            return [result[start:end] for start, end in zip(boundaries, boundaries[1:])]
+        raise TypeError("A batched model must return a numpy array or list")
 
     return inference_fn
+
+
+def _supports_adaptive_batching(model: ModelInfo) -> bool:
+    """Return whether a model declares an unambiguous axis-zero batch contract."""
+    if not model.input_types or not all(
+        isinstance(input_type, _TensorType)
+        and input_type.shape
+        and input_type.shape[0] == "batch"
+        for input_type in model.input_types.values()
+    ):
+        return False
+
+    output_type = model.output_type
+    return (
+        isinstance(output_type, _TensorType)
+        and bool(output_type.shape)
+        and output_type.shape[0] == "batch"
+    ) or get_origin(output_type) is list
 
 
 class BlazeApp:
@@ -109,6 +181,8 @@ class BlazeApp:
                     "(batching is not compatible with dependency injection)",
                     model_info.name,
                 )
+                continue
+            if not _supports_adaptive_batching(model_info):
                 continue
             batcher = Batcher(
                 self.max_batch_size, self.batch_timeout_ms, self.max_queue_size

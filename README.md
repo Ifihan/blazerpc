@@ -126,7 +126,7 @@ Each `yield` sends a message to the client over the open gRPC stream. The client
 
 ## Adaptive batching
 
-When `enable_batching=True` (the default), BlazeRPC collects individual requests and groups them into batches before calling your model function. This is essential for GPU workloads where batch inference is significantly faster than processing requests one at a time.
+When `enable_batching=True` (the default), BlazeRPC combines compatible tensor requests and calls your model once with concatenated NumPy inputs. This is useful for GPU workloads where batch inference is significantly faster than processing requests one at a time.
 
 ```python
 app = BlazeApp(
@@ -136,11 +136,13 @@ app = BlazeApp(
 )
 ```
 
+Adaptive batching requires every input to be a `TensorInput` with `"batch"` as its first dimension and a similarly batched `TensorOutput` or `list[...]` result. Inputs are concatenated on axis 0 and outputs are split using each request's original leading size. Scalar, mixed-signature, and unmarked tensor endpoints execute directly without queue delay.
+
 The batching layer handles:
 
 - **Collecting requests** from concurrent clients into a single batch.
 - **Dispatching partial batches** when the timeout expires, ensuring low latency even under light load.
-- **Partial failure isolation** -- if one item in a batch fails, only that client receives an error. Other clients in the batch still get their results.
+- **One model invocation** for each collected group of compatible tensor requests.
 
 ## Tensor types
 

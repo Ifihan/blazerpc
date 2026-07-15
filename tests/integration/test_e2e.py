@@ -298,42 +298,86 @@ async def test_async_model_over_wire() -> None:
 
 @pytest.mark.asyncio
 async def test_unary_with_batching_over_wire() -> None:
-    """Batched model works end-to-end with per-model batcher lifecycle."""
-    from blazerpc.app import _make_batch_inference_fn
-    from blazerpc.runtime.batcher import Batcher
+    """Compatible tensor RPCs use one model call and receive split results."""
+    app = BlazeApp(enable_batching=True, max_batch_size=4, batch_timeout_ms=100)
+    calls = 0
 
-    app = BlazeApp(enable_batching=True, max_batch_size=4)
+    @app.model("double_batched")
+    def double_batched(
+        values: TensorInput[np.float32, "batch", 2],  # noqa: F821
+    ) -> TensorOutput[np.float32, "batch", 2]:  # noqa: F821
+        nonlocal calls
+        calls += 1
+        return values * 2
 
     @app.model("add")
     def add(a: float, b: float) -> float:
         return a + b
 
-    model = app.registry.get("add")
-    batcher = Batcher(app.max_batch_size, app.batch_timeout_ms)
-    await batcher.start(_make_batch_inference_fn(model))
+    model = app.registry.get("double_batched")
+    batchers = await app._create_batchers()
+    assert set(batchers) == {"double_batched"}
 
-    servicer = build_servicer(app.registry, batchers={"add": batcher})
+    servicer = build_servicer(app.registry, batchers=batchers)
     server = Server([servicer], codec=RawCodec())
     await server.start("127.0.0.1", 0)
     port = _get_server_port(server)
 
     req_cls, resp_cls = build_message_classes(model)
+    add_req_cls, add_resp_cls = build_message_classes(app.registry.get("add"))
 
     channel = Channel("127.0.0.1", port, codec=RawCodec())
     try:
-        request_bytes = bytes(req_cls(a=10.0, b=20.0))
-        response = await _unary_call(
+        add_response = await _unary_call(
             channel,
             "/blazerpc.InferenceService/PredictAdd",
-            request_bytes,
-            resp_cls,
+            bytes(add_req_cls(a=10.0, b=20.0)),
+            add_resp_cls,
         )
-        assert abs(response.result - 30.0) < 1e-5  # type: ignore[union-attr]
+        assert abs(add_response.result - 30.0) < 1e-5  # type: ignore[union-attr]
+
+        arrays = [
+            np.array([[1, 2]], dtype=np.float32),
+            np.array([[3, 4], [5, 6]], dtype=np.float32),
+        ]
+        requests = [
+            bytes(
+                req_cls(
+                    values=_TensorProtoMsg(
+                        shape=list(array.shape),
+                        dtype="float",
+                        data=array.tobytes(),
+                    )
+                )
+            )
+            for array in arrays
+        ]
+        responses = await asyncio.gather(
+            *[
+                _unary_call(
+                    channel,
+                    "/blazerpc.InferenceService/PredictDoubleBatched",
+                    request,
+                    resp_cls,
+                )
+                for request in requests
+            ]
+        )
+        results = [
+            np.frombuffer(response.result.data, dtype=np.float32).reshape(  # type: ignore[union-attr]
+                response.result.shape  # type: ignore[union-attr]
+            )
+            for response in responses
+        ]
+        assert calls == 1
+        np.testing.assert_array_equal(results[0], arrays[0] * 2)
+        np.testing.assert_array_equal(results[1], arrays[1] * 2)
     finally:
         channel.close()
         server.close()
         await server.wait_closed()
-        await batcher.stop()
+        for batcher in batchers.values():
+            await batcher.stop()
 
 
 @pytest.mark.asyncio
