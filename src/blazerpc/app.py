@@ -16,7 +16,7 @@ from blazerpc.runtime.batcher import Batcher
 from blazerpc.runtime.registry import ModelInfo, ModelRegistry, batcher_key
 from blazerpc.server.grpc import GRPCServer
 from blazerpc.server.health import build_health_service
-from blazerpc.server.middleware import Middleware
+from blazerpc.server.middleware import Middleware, TransportMiddleware
 from blazerpc.server.reflection import build_reflection_service
 from blazerpc.types import _TensorType
 
@@ -117,6 +117,7 @@ class BlazeApp:
         batch_timeout_ms: float = 10.0,
         middleware: list[Middleware] | None = None,
         max_queue_size: int = 1024,
+        jsonrpc_middleware: list[TransportMiddleware] | None = None,
     ):
         if (
             isinstance(max_batch_size, bool)
@@ -149,6 +150,7 @@ class BlazeApp:
             self.middleware: list[Middleware] = []
         else:
             self.middleware = list(middleware)
+        self.jsonrpc_middleware = list(jsonrpc_middleware or [])
 
     def model(
         self,
@@ -234,7 +236,7 @@ class BlazeApp:
         dispatcher = JsonRpcDispatcher(
             self.registry, batchers=batchers, app_state=self.state
         )
-        server = JsonRpcServer(dispatcher)
+        server = JsonRpcServer(dispatcher, middleware=self.jsonrpc_middleware)
 
         try:
             await server.start(host, port)
@@ -271,7 +273,9 @@ class BlazeApp:
         dispatcher = JsonRpcDispatcher(
             self.registry, batchers=batchers, app_state=self.state
         )
-        jsonrpc_server = JsonRpcServer(dispatcher)
+        jsonrpc_server = JsonRpcServer(
+            dispatcher, middleware=self.jsonrpc_middleware
+        )
 
         loop = asyncio.get_running_loop()
         shutdown_event = asyncio.Event()

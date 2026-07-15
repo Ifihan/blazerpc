@@ -11,7 +11,10 @@ from blazerpc import TensorInput, TensorOutput
 from blazerpc.app import BlazeApp, _make_batch_inference_fn
 from blazerpc.exceptions import ModelNotFoundError, ValidationError
 from blazerpc.codegen.invoke import invoke_model
-from blazerpc.server.middleware import LoggingMiddleware
+from blazerpc.server.middleware import (
+    LoggingMiddleware,
+    TransportLoggingMiddleware,
+)
 
 
 def test_app_creation() -> None:
@@ -87,6 +90,19 @@ def test_app_accepts_middleware() -> None:
 def test_app_middleware_defaults_to_empty() -> None:
     app = BlazeApp()
     assert app.middleware == []
+    assert app.jsonrpc_middleware == []
+
+
+def test_app_keeps_jsonrpc_middleware_separate() -> None:
+    grpc_middleware = LoggingMiddleware()
+    jsonrpc_middleware = TransportLoggingMiddleware()
+    app = BlazeApp(
+        middleware=[grpc_middleware],
+        jsonrpc_middleware=[jsonrpc_middleware],
+    )
+
+    assert app.middleware == [grpc_middleware]
+    assert app.jsonrpc_middleware == [jsonrpc_middleware]
 
 
 def test_app_configures_batch_queue_capacity() -> None:

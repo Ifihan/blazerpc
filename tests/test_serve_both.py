@@ -20,6 +20,8 @@ class _FakeServer:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.instances.append(self)
+        self.args = args
+        self.kwargs = kwargs
         self.started = asyncio.Event()
         self.shutdown = asyncio.Event()
         self.stopped = False
@@ -67,6 +69,41 @@ def _make_app() -> BlazeApp:
         return text
 
     return app
+
+
+async def test_jsonrpc_middleware_is_wired_to_both_transport_modes(
+    monkeypatch: pytest.MonkeyPatch, fake_servers: None
+) -> None:
+    from blazerpc.server.middleware import TransportLoggingMiddleware
+
+    middleware = TransportLoggingMiddleware()
+    app = _make_app()
+    app.jsonrpc_middleware = [middleware]
+
+    jsonrpc_task = asyncio.create_task(app.serve_jsonrpc())
+    async def wait_for_jsonrpc() -> None:
+        while not _FakeJsonRpcServer.instances:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_jsonrpc(), timeout=1)
+    jsonrpc = _FakeJsonRpcServer.instances[0]
+    await jsonrpc.stop()
+    await asyncio.wait_for(jsonrpc_task, timeout=1)
+    assert jsonrpc.kwargs["middleware"] == [middleware]
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, callback: None)
+    monkeypatch.setattr(loop, "remove_signal_handler", lambda sig: True)
+    both_task = asyncio.create_task(app.serve_both())
+    await _wait_for_instances(both_task, run=0)
+    grpc = _FakeGrpcServer.instances[0]
+    both_jsonrpc = _FakeJsonRpcServer.instances[1]
+    await _wait_until_started(grpc, both_jsonrpc)
+    await both_jsonrpc.stop()
+    await asyncio.wait_for(both_task, timeout=1)
+
+    assert both_jsonrpc.kwargs["middleware"] == [middleware]
+    assert grpc.kwargs["middleware"] == []
 
 
 async def _wait_for_instances(task: asyncio.Task[None], run: int = 0) -> None:

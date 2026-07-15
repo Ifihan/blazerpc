@@ -17,6 +17,7 @@ from blazerpc import BlazeApp, Context, Depends
 from blazerpc.codegen.jsonrpc_handler import JsonRpcDispatcher
 from blazerpc.jsonrpc_client import JsonRpcClient
 from blazerpc.server.jsonrpc import JsonRpcServer
+from blazerpc.server.middleware import RequestInfo, ResponseInfo, TransportMiddleware
 from blazerpc.types import TensorInput, TensorOutput
 
 
@@ -27,10 +28,11 @@ from blazerpc.types import TensorInput, TensorOutput
 
 async def _start_test_server(
     app: BlazeApp,
+    middleware: list[TransportMiddleware] | None = None,
 ) -> tuple[JsonRpcServer, int]:
     """Start a JSON-RPC server on a random port and return (server, port)."""
     dispatcher = JsonRpcDispatcher(app.registry, app_state=app.state)
-    server = JsonRpcServer(dispatcher)
+    server = JsonRpcServer(dispatcher, middleware=middleware)
 
     # Use aiohttp internals to bind to port 0 (OS-assigned)
     from aiohttp import web
@@ -259,5 +261,106 @@ async def test_error_model_not_found_e2e() -> None:
                 body = await resp.json()
                 assert "error" in body
                 assert body["error"]["code"] == -32601
+    finally:
+        await server.stop()
+
+
+async def test_middleware_denial_prevents_model_execution() -> None:
+    app = BlazeApp(enable_batching=False)
+    model_calls = 0
+    requests: list[RequestInfo] = []
+    responses: list[ResponseInfo] = []
+
+    @app.model("secret")
+    def secret(value: str) -> str:
+        nonlocal model_calls
+        model_calls += 1
+        return value
+
+    class DenyMiddleware(TransportMiddleware):
+        async def on_request(self, info: RequestInfo) -> None:
+            requests.append(info)
+            raise PermissionError("sensitive authorization detail")
+
+        async def on_response(self, info: ResponseInfo) -> None:
+            responses.append(info)
+
+    server, port = await _start_test_server(app, [DenyMiddleware()])
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "predict.secret",
+                "params": {"value": "classified"},
+                "id": 7,
+            }
+            async with session.post(
+                f"http://127.0.0.1:{port}/jsonrpc", json=payload
+            ) as resp:
+                body = await resp.json()
+
+        assert resp.status == 403
+        assert body == {
+            "jsonrpc": "2.0",
+            "error": {"code": -32000, "message": "Forbidden"},
+            "id": 7,
+        }
+        assert "sensitive" not in str(body)
+        assert model_calls == 0
+        assert [info.method for info in requests] == ["predict.secret"]
+        assert len(responses) == 1
+        assert responses[0].method == "predict.secret"
+        assert responses[0].status == 403
+        assert responses[0].duration >= 0
+    finally:
+        await server.stop()
+
+
+async def test_batch_middleware_callbacks_are_per_element() -> None:
+    app = BlazeApp(enable_batching=False)
+    events: list[tuple[str, str, int | None]] = []
+
+    @app.model("echo")
+    def echo(text: str) -> str:
+        return text
+
+    class RecordingMiddleware(TransportMiddleware):
+        async def on_request(self, info: RequestInfo) -> None:
+            events.append(("request", info.method, None))
+
+        async def on_response(self, info: ResponseInfo) -> None:
+            events.append(("response", info.method, info.status))
+
+    server, port = await _start_test_server(app, [RecordingMiddleware()])
+    try:
+        async with aiohttp.ClientSession() as session:
+            batch = [
+                {
+                    "jsonrpc": "2.0",
+                    "method": "predict.echo",
+                    "params": {"text": "ok"},
+                    "id": 1,
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "method": "predict.missing",
+                    "params": {},
+                    "id": 2,
+                },
+            ]
+            async with session.post(
+                f"http://127.0.0.1:{port}/jsonrpc", json=batch
+            ) as resp:
+                assert resp.status == 200
+                await resp.json()
+
+        assert events[:2] == [
+            ("request", "predict.echo", None),
+            ("request", "predict.missing", None),
+        ]
+        assert set(events[2:]) == {
+            ("response", "predict.echo", 200),
+            ("response", "predict.missing", 200),
+        }
     finally:
         await server.stop()

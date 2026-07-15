@@ -262,9 +262,12 @@ class RequestInfo:
 class ResponseInfo:
     """Transport-agnostic response metadata."""
 
-    __slots__ = ("status", "duration", "transport")
+    __slots__ = ("method", "status", "duration", "transport")
 
-    def __init__(self, status: int, duration: float, transport: str) -> None:
+    def __init__(
+        self, status: int, duration: float, transport: str, method: str = ""
+    ) -> None:
+        self.method = method
         self.status = status
         self.duration = duration
         self.transport = transport
@@ -325,8 +328,8 @@ class TransportMetricsMiddleware(TransportMiddleware):
 
     async def on_response(self, info: ResponseInfo) -> None:
         self._COUNTER.labels(
-            method="", status=str(info.status), transport=info.transport
+            method=info.method, status=str(info.status), transport=info.transport
         ).inc()
-        self._HISTOGRAM.labels(method="", transport=info.transport).observe(
+        self._HISTOGRAM.labels(method=info.method, transport=info.transport).observe(
             info.duration
         )

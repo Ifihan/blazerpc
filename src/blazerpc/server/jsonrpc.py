@@ -11,7 +11,8 @@ import json
 import logging
 import signal
 import time
-from typing import TYPE_CHECKING, Sequence
+from http import HTTPStatus
+from typing import TYPE_CHECKING, Any, Sequence
 
 try:
     from aiohttp import web
@@ -104,9 +105,15 @@ class JsonRpcServer:
 
     async def _handle_jsonrpc(self, request: web.Request) -> web.Response:
         """Handle POST /jsonrpc — JSON-RPC 2.0 endpoint."""
+        start = time.monotonic()
+        peer = request.remote or ""
+        headers = dict(request.headers)
         try:
             body = await request.json()
         except json.JSONDecodeError:
+            await self._run_middleware_response(
+                "", 200, time.monotonic() - start
+            )
             return web.json_response(
                 {
                     "jsonrpc": "2.0",
@@ -116,78 +123,182 @@ class JsonRpcServer:
                 status=200,
             )
 
-        peer = request.remote or ""
-        headers = dict(request.headers)
-        start = time.monotonic()
-
-        # JSON-RPC batch: array of requests
+        # Each batch element has its own middleware lifecycle so method-aware
+        # authorization and metrics behave the same as independent requests.
         if isinstance(body, list):
-            results = await self._dispatcher.handle_batch(
-                body, peer=peer, headers=headers
+            processed = await asyncio.gather(
+                *(
+                    self._dispatch_jsonrpc(item, peer=peer, headers=headers)
+                    for item in body
+                )
             )
-            duration = time.monotonic() - start
-            await self._run_middleware_response("batch", duration)
-            return web.json_response(results)
+            return web.json_response([result for result, _ in processed])
 
-        # Single request
-        result = await self._dispatcher.handle(body, peer=peer, headers=headers)
-        duration = time.monotonic() - start
-        method = body.get("method", "") if isinstance(body, dict) else ""
-        await self._run_middleware_response(method, duration)
-        return web.json_response(result)
+        result, status = await self._dispatch_jsonrpc(
+            body, peer=peer, headers=headers
+        )
+        return web.json_response(result, status=status)
 
     async def _handle_sse(self, request: web.Request) -> web.StreamResponse:
         """Handle POST /jsonrpc/stream/<method> — SSE streaming endpoint."""
         method = request.match_info["method"]
-
-        try:
-            body = await request.json()
-        except json.JSONDecodeError:
-            return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-        params = body.get("params", {}) if isinstance(body, dict) else {}
         peer = request.remote or ""
         headers = dict(request.headers)
+        lifecycle_method = f"stream.{method}"
+        start = time.monotonic()
 
-        response = web.StreamResponse(
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+        denial = await self._run_middleware_request(
+            lifecycle_method, peer, headers
         )
-        await response.prepare(request)
+        if denial is not None:
+            status, message = denial
+            await self._run_middleware_response(
+                lifecycle_method, status, time.monotonic() - start
+            )
+            return web.json_response({"error": message}, status=status)
 
+        status = 500
         try:
-            async for chunk in self._dispatcher.handle_streaming(
-                f"stream.{method}", params, peer=peer, headers=headers
-            ):
-                data = json.dumps(chunk)
-                await response.write(f"data: {data}\n\n".encode())
-        except Exception:
-            log.exception("Streaming error for method %s", method)
-            error_data = json.dumps({"error": "Internal server error"})
-            await response.write(f"event: error\ndata: {error_data}\n\n".encode())
+            try:
+                body = await request.json()
+            except json.JSONDecodeError:
+                status = 400
+                return web.json_response({"error": "Invalid JSON body"}, status=400)
 
-        # Signal end of stream
-        await response.write(b"event: done\ndata: {}\n\n")
-        await response.write_eof()
-        return response
+            params = body.get("params", {}) if isinstance(body, dict) else {}
+            response = web.StreamResponse(
+                headers={
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                }
+            )
+            await response.prepare(request)
+
+            status = 200
+            try:
+                async for chunk in self._dispatcher.handle_streaming(
+                    lifecycle_method, params, peer=peer, headers=headers
+                ):
+                    data = json.dumps(chunk)
+                    await response.write(f"data: {data}\n\n".encode())
+            except Exception:
+                status = 500
+                log.exception("Streaming error for method %s", method)
+                error_data = json.dumps({"error": "Internal server error"})
+                await response.write(
+                    f"event: error\ndata: {error_data}\n\n".encode()
+                )
+
+            await response.write(b"event: done\ndata: {}\n\n")
+            await response.write_eof()
+            return response
+        finally:
+            await self._run_middleware_response(
+                lifecycle_method, status, time.monotonic() - start
+            )
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         """Handle GET /health."""
-        return web.json_response({"status": "ok"})
+        method = "health"
+        start = time.monotonic()
+        denial = await self._run_middleware_request(
+            method, request.remote or "", dict(request.headers)
+        )
+        if denial is not None:
+            status, message = denial
+            result = {"error": message}
+        else:
+            status = 200
+            result = {"status": "ok"}
+        await self._run_middleware_response(
+            method, status, time.monotonic() - start
+        )
+        return web.json_response(result, status=status)
 
     # ------------------------------------------------------------------
     # Middleware helpers
     # ------------------------------------------------------------------
 
-    async def _run_middleware_response(self, method: str, duration: float) -> None:
+    async def _dispatch_jsonrpc(
+        self,
+        body: Any,
+        *,
+        peer: str,
+        headers: dict[str, str],
+    ) -> tuple[dict[str, Any], int]:
+        method = body.get("method", "") if isinstance(body, dict) else ""
+        request_id = body.get("id") if isinstance(body, dict) else None
+        start = time.monotonic()
+        denial = await self._run_middleware_request(method, peer, headers)
+        if denial is not None:
+            status, message = denial
+            result = self._jsonrpc_error(request_id, -32000, message)
+        else:
+            try:
+                result = await self._dispatcher.handle(
+                    body, peer=peer, headers=headers
+                )
+                status = 200
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Unhandled JSON-RPC error for method %s", method)
+                status = 500
+                result = self._jsonrpc_error(
+                    request_id, -32603, "Internal server error"
+                )
+
+        await self._run_middleware_response(
+            method, status, time.monotonic() - start
+        )
+        return result, status
+
+    async def _run_middleware_request(
+        self, method: str, peer: str, headers: dict[str, str]
+    ) -> tuple[int, str] | None:
+        from blazerpc.server.middleware import RequestInfo
+
+        info = RequestInfo(method, peer, headers, "jsonrpc")
+        for mw in self._middleware:
+            try:
+                await mw.on_request(info)
+            except asyncio.CancelledError:
+                raise
+            except web.HTTPException as exc:
+                try:
+                    message = HTTPStatus(exc.status).phrase
+                except ValueError:
+                    message = "Request denied"
+                return exc.status, message
+            except PermissionError:
+                return 403, "Forbidden"
+            except Exception:
+                log.exception("Middleware error in on_request")
+                return 500, "Internal server error"
+        return None
+
+    async def _run_middleware_response(
+        self, method: str, status: int, duration: float
+    ) -> None:
         from blazerpc.server.middleware import ResponseInfo
 
-        info = ResponseInfo(status=200, duration=duration, transport="jsonrpc")
+        info = ResponseInfo(
+            method=method,
+            status=status,
+            duration=duration,
+            transport="jsonrpc",
+        )
         for mw in self._middleware:
             try:
                 await mw.on_response(info)
             except Exception:
                 log.exception("Middleware error in on_response")
+
+    @staticmethod
+    def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "error": {"code": code, "message": message},
+            "id": request_id,
+        }
